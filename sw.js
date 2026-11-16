@@ -1,6 +1,6 @@
 // Offline: die App-Dateien kommen aus dem Zwischenspeicher, die Vereinsdaten liegen in IndexedDB (app.js).
-const CACHE = "ttv08-app-v3";
-const DATEIEN = ["./", "index.html", "app.css?v=3", "app.js?v=3", "config.js?v=3", "manifest.webmanifest",
+const CACHE = "ttv08-app-v4";
+const DATEIEN = ["./", "index.html", "app.css?v=4", "app.js?v=4", "config.js?v=4", "manifest.webmanifest",
   "icon-192.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
