@@ -211,7 +211,9 @@ const Google = {
 
 // ===================================================================================================== Zustand
 const S = {
-  daten: null,          // Inhalt von mobil_daten.json
+  daten: null,          // was die App zeigt: mobil_daten.json, ergänzt um frische Tabellen/Spielpläne (live.json)
+  roh: null,            // mobil_daten.json wie vom PC geschrieben
+  live: null,           // live.json: Tabellen und Spielpläne, die GitHub alle paar Stunden von mytischtennis.de holt
   geladen: null,        // wann vom Server geholt (ISO)
   quelle: null,         // "google" | "datei"
   laedt: false,
@@ -226,7 +228,9 @@ async function ladeAusSpeicher() {
   try {
     const e = await DB.hole("daten");
     if (e && e.puffer) {
-      S.daten = await entpacke(e.puffer); S.geladen = e.geladen; S.quelle = e.quelle; S.benutzer = e.benutzer || null;
+      S.roh = await entpacke(e.puffer); S.geladen = e.geladen; S.quelle = e.quelle; S.benutzer = e.benutzer || null;
+      try { S.live = (await DB.hole("live")) || null; } catch (err) { S.live = null; }
+      anwenden();
       return true;
     }
   } catch (err) { console.warn(err); }
@@ -251,8 +255,9 @@ async function ladeVonGoogle({ leise = false } = {}) {
     if (!f) throw new Error(`Die Datei „${CFG.ordnerName}/${CFG.dateiName}“ ist für dieses Google-Konto nicht zu finden. Entweder hat das Programm am PC sie noch nicht in den Datenordner geschrieben (Datei → „Handy-App jetzt aktualisieren“), oder der Datenordner ist für dieses Konto nicht freigegeben.`);
     if (f.wurzel) localStorage.setItem("g_wurzel", f.wurzel);
     const puffer = await Google.lade(f.datei.id);
-    S.daten = await entpacke(puffer);
+    S.roh = await entpacke(puffer); anwenden();
     await speichere(puffer, "google");
+    ladeLive();
     if (!leise) toast("Aktualisiert – Stand " + relZeit(S.daten.meta.erzeugt));
   } catch (e) {
     if (e.abgelaufen) { Google.anmelden(true); return; }
@@ -265,8 +270,9 @@ async function ladeVonGoogle({ leise = false } = {}) {
 async function ladeDatei(datei) {
   try {
     const puffer = await datei.arrayBuffer();
-    S.daten = await entpacke(puffer);
-    if (!S.daten.meta) throw new Error("Das ist keine Datei der Vereinsdatenbank.");
+    const roh = await entpacke(puffer);
+    if (!roh.meta) throw new Error("Das ist keine Datei der Vereinsdatenbank.");
+    S.roh = roh; anwenden(); ladeLive();
     await speichere(puffer, "datei");
     location.hash = "#/start"; zeige();
   } catch (e) { toast("Datei nicht lesbar: " + e.message, 4000); }
@@ -277,9 +283,66 @@ async function abmelden() {
   if (t) { try { await fetch("https://oauth2.googleapis.com/revoke?token=" + t, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" } }); } catch (e) { /* offline */ } }
   ["g_token", "g_angemeldet", "g_wurzel", "g_email"].forEach((k) => localStorage.removeItem(k));
   await DB.leeren();
-  S.daten = null; S.benutzer = null; S.geladen = null; S.quelle = null;
+  S.daten = null; S.roh = null; S.live = null; S.benutzer = null; S.geladen = null; S.quelle = null;
   location.hash = "#/"; zeige();
   toast("Abgemeldet – die Daten sind von diesem Gerät gelöscht.");
+}
+
+// ===================================================================================================== Frische Tabellen und Spielpläne
+// GitHub holt alle paar Stunden die öffentlichen Tabellen und Spielpläne von mytischtennis.de (live.json neben der App).
+// Sind sie neuer als die Datei vom PC, ersetzen sie dort Tabellen und Spieltermine. Spielberichte, eigene Termine und
+// alles andere kommen weiter vom PC.
+const LIVE_URLS = ["live.json", "https://raw.githubusercontent.com/Werragrund08/werragrund08.github.io/main/live.json"];
+async function ladeLive() {
+  if (!navigator.onLine || !S.roh) return;
+  let bestes = null;
+  for (const url of LIVE_URLS) {
+    try {
+      const r = await fetch(url + (url.includes("?") ? "&" : "?") + "t=" + Date.now(), { cache: "no-store" });
+      if (!r.ok) continue;
+      const l = await r.json();
+      if (l && l.format === 1 && (!bestes || `${l.erzeugt}|${l.geprueft}` > `${bestes.erzeugt}|${bestes.geprueft}`)) bestes = l;
+    } catch (e) { /* nicht erreichbar */ }
+  }
+  if (!bestes || (S.live && `${S.live.erzeugt}|${S.live.geprueft}` >= `${bestes.erzeugt}|${bestes.geprueft}`)) return;
+  S.live = bestes;
+  try { await DB.setze("live", bestes); } catch (e) { /* egal */ }
+  anwenden(); zeige();
+}
+function anwenden() {
+  if (!S.roh) { S.daten = null; return; }
+  const d = typeof structuredClone === "function" ? structuredClone(S.roh) : JSON.parse(JSON.stringify(S.roh));
+  const l = S.live;
+  d.liveInfo = null;
+  if (l && d.spielbetrieb) {
+    const pcZeit = d.meta?.erzeugt || "";
+    // Tabellen: Ligen aus live.json ersetzen gleichnamige, wenn sie neuer sind als der Stand vom PC
+    let tabellenNeu = false;
+    for (const [saison, lt] of Object.entries(l.tabellen || {})) {
+      const t = (d.spielbetrieb.tabellen = d.spielbetrieb.tabellen || {})[saison] || { stand: "", ligen: [] };
+      if ((t.stand || "") > (lt.stand || "")) continue;
+      for (const liga of lt.ligen) {
+        const i = t.ligen.findIndex((x) => norm(x.liga) === norm(liga.liga));
+        if (i >= 0) t.ligen[i] = liga; else t.ligen.push(liga);
+      }
+      t.stand = lt.stand; t.live = true; d.spielbetrieb.tabellen[saison] = t; tabellenNeu = true;
+    }
+    // Spieltermine: je Mannschaft der Spielplan aus live.json statt des Stands vom PC (wenn neuer)
+    const spieleNeu = (l.erzeugt || "") > pcZeit && (l.spiele || []).length;
+    if (spieleNeu && d.kalender) {
+      const nr = new Set(l.spiele.map((s) => s.mannschaft).filter(Boolean));
+      const farbe = {};
+      for (const t of d.kalender.termine) if (t.spiel && t.mannschaft) farbe[t.mannschaft] = t.farbe;
+      d.kalender.termine = d.kalender.termine.filter((t) => !(t.spiel && nr.has(t.mannschaft)))
+        .concat(l.spiele.filter((s) => nr.has(s.mannschaft)).map((s) => ({
+          datum: s.datum, bis: null, uhrzeit: s.uhrzeit, titel: s.titel, text: s.text, ort: s.ort, bereich: "Spielbetrieb",
+          frist: false, status: datum(s.datum) < heute() ? "vorbei" : "", spiel: true, abo: true, mannschaft: s.mannschaft,
+          farbe: farbe[s.mannschaft] || d.kalender.bereiche?.Spielbetrieb || "#2563a8", heim: s.heim, gegner: s.gegner, team: s.team })))
+        .sort((a, b) => (a.datum + (a.uhrzeit || "")).localeCompare(b.datum + (b.uhrzeit || "")));
+    }
+    if (tabellenNeu || spieleNeu) d.liveInfo = { geprueft: l.geprueft, erzeugt: l.erzeugt, spiele: !!spieleNeu };
+  }
+  S.daten = d;
 }
 
 // Datei aus dem Datenordner öffnen (PDF in Google Drive, Bilder in der App)
@@ -447,7 +510,7 @@ document.addEventListener("change", (e) => {
 });
 AKTIONEN.setze = (el) => { const [seite, feld] = el.dataset.feld.split("."); ansicht(seite)[feld] = el.dataset.wert; zeige(); };
 AKTIONEN.umschalten = (el) => { const [seite, feld] = el.dataset.feld.split("."); const a = ansicht(seite); a[feld] = a[feld] === el.dataset.wert ? "" : el.dataset.wert; zeige(); };
-AKTIONEN.aktualisieren = () => ladeVonGoogle();
+AKTIONEN.aktualisieren = () => { ladeVonGoogle(); ladeLive(); };
 AKTIONEN.zurueck = () => { sessionStorage.setItem("zurueck", "1"); history.back(); };
 AKTIONEN.anmelden = () => { S.anmeldeFehler = ""; Google.anmelden(false); };
 AKTIONEN.dateiWaehlen = () => $("#dateiwahl").click();
@@ -547,9 +610,7 @@ SEITEN.start = () => {
   if (istVorstand() && st.beitraege_offen) kacheln.push(`<button class="kachel" data-go="#/finanzen"><span class="k">Beiträge ${st.beitraege_offen.jahr} offen</span><span class="w zahl">${eur(st.beitraege_offen.betrag)}</span><span class="u">${st.beitraege_offen.anzahl} Mitglied${st.beitraege_offen.anzahl === 1 ? "" : "er"}</span></button>`);
   if (istVorstand() && st.kontostand) kacheln.push(`<button class="kachel" data-go="#/finanzen"><span class="k">Kontostand</span><span class="w zahl">${eur(st.kontostand.betrag)}</span><span class="u">Stand ${dmy(st.kontostand.stand)}</span></button>`);
 
-  // Nächste Spiele: je Mannschaft das erste ab heute
-  const gesehen = new Set();
-  const spiele = (st.naechste_spiele || []).filter((s) => datum(s.datum) >= t && !gesehen.has(s.mannschaft) && gesehen.add(s.mannschaft));
+  const spiele = naechsteSpiele();
   const spielKarten = spiele.map((s) => {
     const b = s.bilanz || {};
     const einord = s.einordnung ? pille(s.einordnung, s.einordnung === "Spitzenspiel" ? "blau" : s.einordnung === "Kellerduell" ? "rot" : s.einordnung === "Favorit" ? "gruen" : s.einordnung === "Außenseiter" ? "gelb" : "") : "";
@@ -577,7 +638,8 @@ SEITEN.start = () => {
   const geb = (d.kalender?.termine || []).filter((x) => x.bereich === "Geburtstage" && tageBis(x.datum) >= 0 && tageBis(x.datum) <= 14);
   const leben = (d.vereinsleben || []).filter((e) => e.datum && datum(e.datum) <= t).slice(0, 2);
 
-  const links = `${abschnitt("Nächste Spiele", "Kalender", "#/kalender/spiele")}${spielKarten || `<div class="karte"><span class="leer">Keine Spiele in den nächsten Wochen.</span></div>`}
+  const liveHinweis = d.liveInfo ? `<span class="hinweis">Tabellenplätze${d.liveInfo.spiele ? " und Spielplan" : ""} von mytischtennis.de, zuletzt geprüft ${esc(dmy(d.liveInfo.geprueft))}</span>` : "";
+  const links = `${abschnitt("Nächste Spiele", "Kalender", "#/kalender/spiele")}${spielKarten || `<div class="karte"><span class="leer">Keine Spiele in den nächsten Wochen.</span></div>`}${liveHinweis}
     <div class="karte dicht">${`<div style="padding:14px 14px 4px">${kartenTitel("Letzte Ergebnisse", "Spielbetrieb", "#/spiele")}</div>`}${(st.letzte_ergebnisse || []).slice(0, 5).map(ergebnisZeile).join("") || `<div class="zeile"><span class="leer">Noch keine Spielberichte.</span></div>`}</div>`;
   const rechts = `<div class="karte">${kartenTitel("Termine und Fristen", "Kalender", "#/kalender")}${termine.map((x) => terminZeile(x)).join("") || `<span class="leer">Keine anstehenden Termine.</span>`}</div>
     ${geb.length ? `<div class="karte">${kartenTitel("Geburtstage")}${geb.map((x) => `<div style="display:flex;align-items:center;gap:10px">${pille(tageBis(x.datum) === 0 ? "heute" : wtDatum(x.datum), "rosa")}<span style="font-size:14px${x.rund ? ";font-weight:700" : ""}">${esc(x.name || x.titel)} <span class="gedimmt">wird ${x.alter ?? ""}</span></span></div>`).join("")}</div>` : ""}
@@ -594,6 +656,46 @@ SEITEN.start = () => {
       <div style="display:grid;gap:12px" class="start-raster">${`<div style="display:flex;flex-direction:column;gap:12px;min-width:0">${links}</div><div style="display:flex;flex-direction:column;gap:12px;min-width:0">${rechts}</div>`}</div>`,
   };
 };
+// Je Mannschaft das nächste Spiel ab heute – mit Tabellenplätzen aus der neuesten Tabelle und der Bilanz gegen den Verein
+function naechsteSpiele() {
+  const d = S.daten, t = heute(), ex = d.start?.naechste_spiele || [], gesehen = new Set();
+  const kandidaten = d.liveInfo?.spiele
+    ? (d.kalender?.termine || []).filter((k) => k.spiel && k.mannschaft && k.gegner).map((k) => ({
+      datum: k.datum, uhrzeit: k.uhrzeit, ort: k.ort, mannschaft: k.mannschaft, team: k.team || teamName(k.mannschaft),
+      gegner: k.gegner, heim: k.heim, begegnung: k.titel }))
+    : ex;
+  const saison = SB().aktuelle_saison;
+  return kandidaten.filter((s) => datum(s.datum) >= t && !gesehen.has(s.mannschaft) && gesehen.add(s.mannschaft)).map((s) => {
+    const alt = ex.find((x) => x.mannschaft === s.mannschaft && norm(x.gegner) === norm(s.gegner)) || {};
+    const tp = tabellenPlatz(saison, s.mannschaft);
+    let platzGegner = alt.platz_gegner ?? null, anzahl = alt.anzahl ?? null;
+    if (tp) {
+      const liga = (SB().tabellen?.[saison]?.ligen || []).find((l) => l.liga === tp.liga);
+      const g = norm(s.gegner);
+      const z = liga && (liga.zeilen.find((r) => norm(r.name) === g) || liga.zeilen.find((r) => !r.eigen && g && (norm(r.name).includes(g) || g.includes(norm(r.name)))));
+      anzahl = liga ? liga.zeilen.length : anzahl; platzGegner = z ? z.platz : platzGegner;
+    }
+    const platz = tp ? tp.platz : alt.platz ?? null;
+    return { ...alt, ...s, liga: tp?.liga || alt.liga || "", platz, platz_gegner: platzGegner, anzahl,
+      einordnung: einordnung(platz, platzGegner, anzahl), bilanz: alt.bilanz || bilanzGegen(s.gegner) };
+  });
+}
+function einordnung(eigen, gegner, anzahl) { // wie im Programm (Startseitenmodul.einordnung)
+  if (!eigen || !gegner || !anzahl) return "";
+  if (eigen <= 3 && gegner <= 3) return "Spitzenspiel";
+  if (eigen >= anzahl - 2 && gegner >= anzahl - 2) return "Kellerduell";
+  if (gegner - eigen >= 4) return "Favorit";
+  if (eigen - gegner >= 4) return "Außenseiter";
+  return Math.abs(eigen - gegner) <= 1 ? "Duell auf Augenhöhe" : "";
+}
+function bilanzGegen(gegner) {
+  const v = norm(gegnerVerein(gegner));
+  const x = gegnerbilanz(SB().spiele).find((z) => norm(z.verein) === v);
+  if (!x) return { begegnungen: 0, siege: 0, unentschieden: 0, niederlagen: 0, seit: "", bester: null, letzte: [] };
+  const letzte = x.spiele.sort((a, b) => b.datum.localeCompare(a.datum)).slice(0, 3)
+    .map((s) => ({ datum: s.datum, key: s.key, ergebnis: s.ergebnis, heim: s.heim, saison: s.saison, halbserie: s.halbserie }));
+  return { begegnungen: x.beg, siege: x.s, unentschieden: x.u, niederlagen: x.n, seit: x.seit, bester: null, letzte };
+}
 function gegnerVerein(name) { return String(name || "").replace(/\s+(I|II|III|IV|V|VI|VII|VIII|IX|X)$/u, "").trim(); }
 
 // ===================================================================================================== Mitglieder
@@ -818,7 +920,7 @@ function tabTabellen(a) {
     <div style="padding:0 10px">${kartenTitel(l.liga)}</div>
     <table class="tabelle"><thead><tr><th>Pl.</th><th>Mannschaft</th><th>Sp.</th><th>Spiele</th><th>Punkte</th></tr></thead><tbody>
     ${l.zeilen.map((z) => `<tr class="${z.eigen ? "eigen" : ""}"><td>${z.platz ?? ""}</td><td>${esc(z.name)} ${z.zeichen && ZEICHEN[z.zeichen] ? `<span class="zeichen" style="color:${z.zeichen.includes("ab") || z.zeichen === "zurueck" ? "var(--p-rot)" : "var(--p-gruen)"}">${ZEICHEN[z.zeichen]}</span>` : ""}</td><td>${z.beg ?? ""}</td><td>${z.spiele ? z.spiele.join(":") : ""}</td><td>${z.punkte ? z.punkte.join(":") : ""}</td></tr>`).join("")}
-    </tbody></table></div>`).join("") + `<span class="hinweis">Stand der Tabelle: ${esc(dmy(t.stand))}. ▲ Aufstieg · △ Relegation · ▼ Abstieg</span>`;
+    </tbody></table></div>`).join("") + `<span class="hinweis">Stand der Tabelle: ${esc(dmy(t.stand))}${t.live ? " (von mytischtennis.de, automatisch abgerufen)" : ""}. ▲ Aufstieg · △ Relegation · ▼ Abstieg</span>`;
 }
 function tabBilanzen(a) {
   const spiele = spieleFilter({ saison: a.saison, hs: a.hs });
@@ -1183,8 +1285,10 @@ async function starte() {
     const alter = S.geladen ? Date.now() - new Date(S.geladen).getTime() : Infinity;
     if (zurueckVonGoogle || alter > 5 * 60000) ladeVonGoogle({ leise: !zurueckVonGoogle });
   }
+  ladeLive();
   // Zurück in die App (vom Home-Bildschirm): nach einer Stunde leise neu laden, wenn die Anmeldung noch gilt
   document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") ladeLive();
     if (document.visibilityState === "visible" && S.quelle === "google" && Google.token() && S.geladen && Date.now() - new Date(S.geladen).getTime() > 3600000) ladeVonGoogle({ leise: true });
   });
 }
