@@ -130,29 +130,37 @@ const Google = {
   anmelden(still = false) {
     if (!CFG.googleClientId) { toast("Google ist noch nicht eingerichtet (config.js)."); return; }
     const zustand = Math.random().toString(36).slice(2);
-    sessionStorage.setItem("g_zustand", zustand);
-    sessionStorage.setItem("g_ziel", location.hash || "#/start");
+    localStorage.setItem("g_zustand", zustand);
+    localStorage.setItem("g_ziel", location.hash && !location.hash.includes("access_token") ? location.hash : "#/start");
     const p = new URLSearchParams({
       client_id: CFG.googleClientId, redirect_uri: location.origin + location.pathname, response_type: "token",
       scope: SCOPE, include_granted_scopes: "true", state: zustand,
     });
     const hint = localStorage.getItem("g_email");
     if (hint) p.set("login_hint", hint);
-    if (still) p.set("prompt", "none");
+    if (still) p.set("prompt", "none"); else if (Google.token()) p.set("prompt", "select_account");
     location.href = "https://accounts.google.com/o/oauth2/v2/auth?" + p.toString();
   },
   // Rückkehr von Google: #access_token=…&expires_in=…&state=…
   rueckkehr() {
     if (!location.hash.includes("access_token=") && !location.hash.includes("error=")) return false;
     const p = new URLSearchParams(location.hash.slice(1));
-    const ziel = sessionStorage.getItem("g_ziel") || "#/start";
-    if (p.get("state") !== sessionStorage.getItem("g_zustand")) { history.replaceState(null, "", location.pathname + ziel); return false; }
+    const ziel = localStorage.getItem("g_ziel") || "#/start";
+    const erwartet = localStorage.getItem("g_zustand");
+    localStorage.removeItem("g_zustand");
+    if (erwartet && p.get("state") !== erwartet) {
+      sessionStorage.setItem("g_fehler", "Sicherheitsprüfung fehlgeschlagen – bitte noch einmal anmelden");
+      history.replaceState(null, "", location.pathname + ziel); return false;
+    }
     if (p.get("access_token")) {
       localStorage.setItem("g_token", JSON.stringify({ wert: p.get("access_token"), ablauf: Date.now() + Number(p.get("expires_in") || 3600) * 1000 }));
       localStorage.setItem("g_angemeldet", "1");
       sessionStorage.setItem("g_frisch", "1");
     } else if (p.get("error")) {
-      sessionStorage.setItem("g_fehler", p.get("error"));
+      const fehlerText = { access_denied: "Zugriff nicht erlaubt (abgebrochen oder Konto nicht als Testnutzer eingetragen)",
+        interaction_required: "bitte neu anmelden", login_required: "bitte neu anmelden", consent_required: "bitte neu anmelden" };
+      sessionStorage.setItem("g_fehler", fehlerText[p.get("error")] || p.get("error"));
+      if (["interaction_required", "login_required", "consent_required"].includes(p.get("error"))) localStorage.removeItem("g_angemeldet");
     }
     history.replaceState(null, "", location.pathname + ziel);
     return true;
@@ -240,7 +248,7 @@ async function ladeVonGoogle({ leise = false } = {}) {
       if (S.benutzer?.emailAddress) localStorage.setItem("g_email", S.benutzer.emailAddress);
     }
     const f = await Google.findeDatei();
-    if (!f) throw new Error(`„${CFG.ordnerName}/${CFG.dateiName}“ wurde in deinem Google Drive nicht gefunden. Ist der Datenordner für dich freigegeben und hat das Programm am PC die Datei schon geschrieben (beim Beenden oder Datei → „Handy-App jetzt aktualisieren“)?`);
+    if (!f) throw new Error(`Die Datei „${CFG.ordnerName}/${CFG.dateiName}“ ist für dieses Google-Konto nicht zu finden. Entweder hat das Programm am PC sie noch nicht in den Datenordner geschrieben (Datei → „Handy-App jetzt aktualisieren“), oder der Datenordner ist für dieses Konto nicht freigegeben.`);
     if (f.wurzel) localStorage.setItem("g_wurzel", f.wurzel);
     const puffer = await Google.lade(f.datei.id);
     S.daten = await entpacke(puffer);
@@ -441,7 +449,7 @@ AKTIONEN.setze = (el) => { const [seite, feld] = el.dataset.feld.split("."); ans
 AKTIONEN.umschalten = (el) => { const [seite, feld] = el.dataset.feld.split("."); const a = ansicht(seite); a[feld] = a[feld] === el.dataset.wert ? "" : el.dataset.wert; zeige(); };
 AKTIONEN.aktualisieren = () => ladeVonGoogle();
 AKTIONEN.zurueck = () => { sessionStorage.setItem("zurueck", "1"); history.back(); };
-AKTIONEN.anmelden = () => Google.anmelden(false);
+AKTIONEN.anmelden = () => { S.anmeldeFehler = ""; Google.anmelden(false); };
 AKTIONEN.dateiWaehlen = () => $("#dateiwahl").click();
 AKTIONEN.abmelden = () => { if (confirm("Abmelden und alle Vereinsdaten von diesem Gerät löschen?")) abmelden(); };
 AKTIONEN.darstellung = (el) => { localStorage.setItem("darstellung", el.dataset.wert); thema(); zeige(); };
@@ -479,13 +487,17 @@ function avatar(vor, nach, klasse = "") { return `<div class="avatar f${farbInde
 // ===================================================================================================== Anmeldung
 function anmeldeSeite() {
   const g = !!CFG.googleClientId;
-  const fehler = sessionStorage.getItem("g_fehler"); sessionStorage.removeItem("g_fehler");
+  if (sessionStorage.getItem("g_fehler")) { S.anmeldeFehler = sessionStorage.getItem("g_fehler"); sessionStorage.removeItem("g_fehler"); }
+  const fehler = S.anmeldeFehler || "";
   return `<div class="hauptbereich"><div class="anmeldung">
     <div class="logo-gross">08</div>
     <h1>TTV Werragrund 08</h1>
     <p>Vereinsdatenbank zum Ansehen. Die Daten kommen aus dem Datenordner in Google Drive – geändert wird nur im Programm am PC.</p>
-    ${fehler ? `<span class="pille rot">Anmeldung nicht abgeschlossen (${esc(fehler)})</span>` : ""}
-    ${g ? `<button class="knopf primaer" data-akt="anmelden">Mit Google anmelden</button>` : `<span class="pille gelb">Google-Anmeldung ist noch nicht eingerichtet</span>`}
+    ${fehler ? `<span class="pille rot" style="white-space:normal">Anmeldung nicht abgeschlossen: ${esc(fehler)}</span>` : ""}
+    ${S.laedt ? `<span class="pille blau">Suche die Vereinsdaten in Google Drive …</span>` : ""}
+    ${S.fehler && !S.laedt ? `<div class="karte" style="max-width:340px;text-align:left;gap:6px"><b style="color:var(--danger)">Keine Daten geladen</b><span style="font-size:14px">${esc(S.fehler)}</span>${S.benutzer ? `<span class="klein gedimmt">Angemeldet als ${esc(S.benutzer.displayName || "")} (${esc(S.benutzer.emailAddress || "")})</span>` : ""}</div>` : ""}
+    ${g ? (Google.token() && !S.laedt ? `<button class="knopf primaer" data-akt="aktualisieren">Erneut suchen</button><button class="knopf" data-akt="anmelden">Mit anderem Google-Konto anmelden</button>`
+      : `<button class="knopf primaer" data-akt="anmelden" ${S.laedt ? "disabled" : ""}>Mit Google anmelden</button>`) : `<span class="pille gelb">Google-Anmeldung ist noch nicht eingerichtet</span>`}
     <button class="knopf" data-akt="dateiWaehlen">Datei vom Gerät öffnen (Testmodus)</button>
     <input type="file" id="dateiwahl" accept=".gz,.json,application/gzip,application/json" hidden onchange="this.files[0] && ladeDatei(this.files[0])">
     <p class="klein">Nur Leserecht: Die App kann in deinem Google Drive nichts ändern oder löschen.</p>
