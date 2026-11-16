@@ -1,0 +1,30 @@
+# Holt alle drei Stunden Tabellen und Spielpläne von mytischtennis.de für die Handy-App (nur öffentliche Daten).
+name: Tabellen und Spielplan
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tabellen
+  cancel-in-progress: false
+jobs:
+  abruf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Abrufen
+        run: python live/abruf.py
+      - name: Speichern
+        run: |
+          if [ -z "$(git status --porcelain live.json)" ]; then echo "Keine Änderung."; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add live.json
+          git commit -m "Tabellen und Spielplan aktualisiert"
+          git push
