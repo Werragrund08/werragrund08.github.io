@@ -401,7 +401,7 @@ const REITER = [
   { id: "mitglieder", titel: "Mitglieder", icon: "mitglieder", seiten: ["mitglieder", "mitglied"] },
   { id: "kalender", titel: "Kalender", icon: "kalender", seiten: ["kalender"] },
   { id: "spiele", titel: "Spiele", icon: "spiele", seiten: ["spiele", "spiel", "gegner", "spieler"] },
-  { id: "mehr", titel: "Mehr", icon: "mehr", seiten: ["mehr", "organisation", "versammlung", "finanzen", "vereinsleben", "eintrag", "dokumente"] },
+  { id: "mehr", titel: "Mehr", icon: "mehr", seiten: ["mehr", "organisation", "versammlung", "vereinsleben", "eintrag", "dokumente"] },
 ];
 // Seitenleiste auf dem iPad: alles direkt erreichbar
 const NAV_GROSS = [
@@ -411,7 +411,6 @@ const NAV_GROSS = [
   { hash: "#/spiele", titel: "Spielbetrieb", icon: "spiele", seiten: ["spiele", "spiel", "gegner", "spieler"] },
   { hash: "#/vereinsleben", titel: "Vereinsleben", icon: "leben", seiten: ["vereinsleben", "eintrag"] },
   { hash: "#/organisation", titel: "Organisation", icon: "org", seiten: ["organisation", "versammlung"] },
-  { hash: "#/finanzen", titel: "Finanzen", icon: "fin", seiten: ["finanzen"], vorstand: true },
   { hash: "#/dokumente", titel: "Dokumente", icon: "dok", seiten: ["dokumente"] },
   { hash: "#/mehr", titel: "Einstellungen", icon: "mehr", seiten: ["mehr"] },
 ];
@@ -428,15 +427,16 @@ const TEILE = {};       // Teilbereiche, die sich ohne Neuzeichnen der Seite än
 const AKTIONEN = {};    // data-akt -> Funktion(element)
 const scrollPos = {};
 
-function kopfStand() {
+function kopfStand(kompakt = false) {
   const m = S.daten?.meta || {};
   let punkt = "", text = `Stand: ${esc(relZeit(m.erzeugt))}${m.von ? " · gespeichert von " + esc(m.von) : ""}`;
   if (S.laedt) { punkt = "alt"; text = "Wird aktualisiert …"; }
   else if (!navigator.onLine) punkt = "offline";
   else if (S.quelle === "datei") punkt = "alt";
   const knopf = S.quelle === "google" || Google.angemeldet()
-    ? `<button class="knopf klein" data-akt="aktualisieren" ${S.laedt ? "disabled" : ""} aria-label="Aktualisieren">${ic("neu", 15)}<span class="nur-gross">Aktualisieren</span></button>` : "";
-  return `<div class="ladezeile"><span class="punkt ${punkt}"></span><span style="flex:1">${text}${!navigator.onLine ? " · offline" : ""}</span>${knopf}</div>`
+    ? `<button class="knopf klein ${kompakt ? "nur-gross" : ""}" data-akt="aktualisieren" ${S.laedt ? "disabled" : ""} aria-label="Aktualisieren">${ic("neu", 15)}<span class="nur-gross">Aktualisieren</span></button>` : "";
+  const ziehen = kompakt && S.quelle === "google" && !S.laedt ? `<span class="nur-handy"> · zum Aktualisieren nach unten ziehen</span>` : "";
+  return `<div class="ladezeile"><span class="punkt ${punkt}"></span><span style="flex:1">${text}${!navigator.onLine ? " · offline" : ""}${ziehen}</span>${knopf}</div>`
     + (S.fehler ? `<div class="pille rot" style="white-space:normal">${esc(S.fehler)}</div>` : "");
 }
 
@@ -458,7 +458,7 @@ function zeige() {
   const navGross = NAV_GROSS.find((t) => t.seiten.includes(r.seite));
   const m = S.daten.meta;
   const seitenleiste = `<nav class="seitenleiste">
-    <button class="marke" data-go="#/start"><div class="marke-logo">08</div><div class="marke-text"><b>${esc(m.verein_kurz || "Verein")}</b><span>Nur Ansicht</span></div></button>
+    <button class="marke" data-go="#/start"><img class="marke-logo" src="wappen.png" alt=""><div class="marke-text"><b>${esc(m.verein_kurz || "Verein")}</b><span>Nur Ansicht</span></div></button>
     ${NAV_GROSS.filter((n) => !n.vorstand || istVorstand()).map((n) => `<button class="nav-eintrag ${n === navGross ? "aktiv" : ""}" data-go="${n.hash}">${ic(n.icon)}${n.titel}</button>`).join("")}
     <div class="nav-fuss">Stand: ${esc(relZeit(m.erzeugt))}<br>gespeichert von ${esc(m.von || "–")}<br>${S.quelle === "google" ? "offline verfügbar" : "Testmodus (Datei)"}</div>
   </nav>`;
@@ -506,6 +506,7 @@ document.addEventListener("change", (e) => {
   const el = e.target.closest("select[data-feld]");
   if (!el) return;
   const [seite, feld] = el.dataset.feld.split(".");
+  if (seite === "spiele" && feld === "saisonhs") { const [sa, hs] = el.value.split("|"); Object.assign(ansicht("spiele"), { saison: sa, hs: hs || "" }); zeige(); return; }
   ansicht(seite)[feld] = el.value; zeige();
 });
 AKTIONEN.setze = (el) => { const [seite, feld] = el.dataset.feld.split("."); ansicht(seite)[feld] = el.dataset.wert; zeige(); };
@@ -553,7 +554,7 @@ function anmeldeSeite() {
   if (sessionStorage.getItem("g_fehler")) { S.anmeldeFehler = sessionStorage.getItem("g_fehler"); sessionStorage.removeItem("g_fehler"); }
   const fehler = S.anmeldeFehler || "";
   return `<div class="hauptbereich"><div class="anmeldung">
-    <div class="logo-gross">08</div>
+    <img class="logo-gross" src="wappen.png" alt="Wappen TTV Werragrund 08">
     <h1>TTV Werragrund 08</h1>
     <p>Vereinsdatenbank zum Ansehen. Die Daten kommen aus dem Datenordner in Google Drive – geändert wird nur im Programm am PC.</p>
     ${fehler ? `<span class="pille rot" style="white-space:normal">Anmeldung nicht abgeschlossen: ${esc(fehler)}</span>` : ""}
@@ -603,57 +604,54 @@ SEITEN.start = () => {
   const d = S.daten, st = d.start || {}, m = d.meta, t = heute();
   const k = st.mitglieder || {};
   const fristen = offeneFristen();
-  const kacheln = [
-    `<button class="kachel" data-go="#/mitglieder"><span class="k">Mitglieder</span><span class="w">${k.gesamt ?? "–"}</span><span class="u">davon ${k.aktiv ?? "–"} aktiv</span></button>`,
-    `<button class="kachel" data-go="#/kalender/fristen"><span class="k">Fristen (30 Tage)</span><span class="w" style="${fristen.length ? "color:var(--p-gelb)" : ""}">${fristen.length}</span><span class="u">${fristen[0] ? "nächste: " + dmy(fristen[0].datum, false) : "keine offen"}</span></button>`,
-  ];
-  if (istVorstand() && st.beitraege_offen) kacheln.push(`<button class="kachel" data-go="#/finanzen"><span class="k">Beiträge ${st.beitraege_offen.jahr} offen</span><span class="w zahl">${eur(st.beitraege_offen.betrag)}</span><span class="u">${st.beitraege_offen.anzahl} Mitglied${st.beitraege_offen.anzahl === 1 ? "" : "er"}</span></button>`);
-  if (istVorstand() && st.kontostand) kacheln.push(`<button class="kachel" data-go="#/finanzen"><span class="k">Kontostand</span><span class="w zahl">${eur(st.kontostand.betrag)}</span><span class="u">Stand ${dmy(st.kontostand.stand)}</span></button>`);
+  const a = ansicht("start", { offen: "" });
+  const kacheln = `<div class="kacheln zwei">
+    <button class="kachel" data-go="#/mitglieder"><span class="k">Mitglieder</span><span class="w">${k.gesamt ?? "–"}</span></button>
+    <button class="kachel" data-go="#/kalender/fristen"><span class="k">Fristen offen</span><span class="w" style="${fristen.length ? "color:var(--p-gelb)" : ""}">${fristen.length}</span></button></div>`;
 
-  const spiele = naechsteSpiele();
-  const spielKarten = spiele.map((s) => {
+  // Nächste Spiele: zwei Zeilen je Mannschaft; Antippen klappt Bilanz und letzte Begegnungen auf
+  const spiele = naechsteSpiele().map((s) => {
     const b = s.bilanz || {};
-    const einord = s.einordnung ? pille(s.einordnung, s.einordnung === "Spitzenspiel" ? "blau" : s.einordnung === "Kellerduell" ? "rot" : s.einordnung === "Favorit" ? "gruen" : s.einordnung === "Außenseiter" ? "gelb" : "") : "";
-    const letzte = (b.letzte || []).map((x) => `<button class="zeile" style="padding:8px 0;min-height:36px;border-bottom:0" data-go="#/spiel/${encodeURIComponent(x.key)}"><span class="haupt"><span class="unter" style="font-size:13px;color:var(--text)">${esc(x.halbserie === "Rückrunde" ? "RR" : "VR")} ${esc(x.saison)} · ${x.heim ? "Heim" : "auswärts"}</span></span>${pille(`${x.ergebnis[0]}:${x.ergebnis[1]}`, ergebnisArt(x.ergebnis))}</button>`).join("");
-    return `<div class="karte">
-      <div style="display:flex;gap:12px;align-items:center">${datumsblock(s.datum)}
-        <div style="display:flex;flex-direction:column;flex:1;min-width:0;gap:2px">
-          <span class="klein gedimmt">${esc(s.team)} · ${esc(s.liga)} · ${s.heim ? "Heimspiel" : "auswärts"}${s.uhrzeit ? " · " + esc(s.uhrzeit) : ""}</span>
-          <span style="font-weight:600">${esc(s.begegnung)}</span>
-          ${s.platz ? `<span class="klein gedimmt">Tabelle: wir ${s.platz}. · Gegner ${s.platz_gegner ? s.platz_gegner + "." : "–"}</span>` : ""}
-        </div>${einord}</div>
-      ${b.begegnungen ? `<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px">
-        <div style="display:flex;flex-direction:column;gap:6px"><span class="klein gedimmt">Bilanz</span>
-          <div class="snu"><span class="s">${b.siege} S</span><span class="u">${b.unentschieden} U</span><span class="n">${b.niederlagen} N</span></div>${bal(b.siege, b.unentschieden, b.niederlagen)}
-          <span class="klein gedimmt">${b.begegnungen} Begegnung${b.begegnungen === 1 ? "" : "en"} seit ${esc(b.seit)}</span></div>
-        <div style="display:flex;flex-direction:column"><span class="klein gedimmt">Letzte Begegnungen</span>${letzte}</div></div>`
-        : `<span class="klein gedimmt">Noch keine Begegnung in den eingelesenen Spielberichten.</span>`}
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="klein gedimmt" style="flex:1">${b.bester ? `Beste Einzelbilanz: ${esc(b.bester[0])} ${b.bester[1]}:${b.bester[2]}` : ""}</span>
-        <a class="link" data-go="#/gegner/${encodeURIComponent(gegnerVerein(s.gegner))}">Alle Spiele gegen ${esc(gegnerVerein(s.gegner))} ›</a></div>
-    </div>`;
+    const offen = a.offen === String(s.mannschaft);
+    const einord = s.einordnung ? pille(s.einordnung.replace("Duell auf Augenhöhe", "Augenhöhe"), s.einordnung === "Spitzenspiel" ? "blau" : s.einordnung === "Kellerduell" ? "rot" : s.einordnung === "Favorit" ? "gruen" : s.einordnung === "Außenseiter" ? "gelb" : "") : "";
+    const plaetze = s.platz ? ` · wir ${s.platz}. · Gegner ${s.platz_gegner ? s.platz_gegner + "." : "–"}` : "";
+    const details = offen ? `<div class="aufklapp-inhalt" style="padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px">
+        <span class="klein gedimmt">${esc(WT_LANG[datum(s.datum).getDay()])}, ${dmy(s.datum)}${s.uhrzeit ? " · " + esc(s.uhrzeit) : ""}${s.ort ? " · " + esc(s.ort.split(",")[0]) : ""}</span>
+        ${b.begegnungen ? `<div style="display:flex;align-items:center;gap:10px"><div class="snu"><span class="s">${b.siege} S</span><span class="u">${b.unentschieden} U</span><span class="n">${b.niederlagen} N</span></div><div style="flex:1">${bal(b.siege, b.unentschieden, b.niederlagen)}</div></div>
+          <span class="klein gedimmt">${b.begegnungen} Begegnung${b.begegnungen === 1 ? "" : "en"} seit ${esc(b.seit)}${b.bester ? ` · beste Einzelbilanz: ${esc(b.bester[0])} ${b.bester[1]}:${b.bester[2]}` : ""}</span>
+          ${(b.letzte || []).map((x) => `<button class="zeile" style="padding:6px 0;min-height:34px;border:0" data-go="#/spiel/${encodeURIComponent(x.key)}"><span class="haupt"><span style="font-size:14px">${esc(x.halbserie === "Rückrunde" ? "RR" : "VR")} ${esc(x.saison)} · ${x.heim ? "Heim" : "auswärts"}</span></span>${pille(`${x.ergebnis[0]}:${x.ergebnis[1]}`, ergebnisArt(x.ergebnis))}</button>`).join("")}`
+        : `<span class="klein gedimmt">Noch keine Begegnung in den Spielberichten.</span>`}
+        <a class="link" data-go="#/gegner/${encodeURIComponent(gegnerVerein(s.gegner))}">Alle Spiele gegen ${esc(gegnerVerein(s.gegner))} ›</a></div>` : "";
+    return `<div class="eintrag"><button class="zeile" style="gap:12px" data-akt="umschalten" data-feld="start.offen" data-wert="${s.mannschaft}">${datumsblock(s.datum)}
+      <div class="haupt"><span class="titel">${s.heim ? "gegen" : "bei"} ${esc(s.gegner)}</span><span class="unter">${esc(s.team)}${esc(plaetze)}</span></div>${einord}</button>${details}</div>`;
   }).join("");
 
   const termine = (d.kalender?.termine || []).filter((x) => x.bereich !== "Geburtstage" && !x.spiel && !["erledigt", "vorbei"].includes(x.status)
-    && (datum(x.datum) >= t || (x.bis && datum(x.bis) >= t) || (x.frist && x.status === "überfällig"))).slice(0, 5);
-  const geb = (d.kalender?.termine || []).filter((x) => x.bereich === "Geburtstage" && tageBis(x.datum) >= 0 && tageBis(x.datum) <= 14);
-  const leben = (d.vereinsleben || []).filter((e) => e.datum && datum(e.datum) <= t).slice(0, 2);
-
+    && (datum(x.datum) >= t || (x.bis && datum(x.bis) >= t) || (x.frist && x.status === "überfällig"))).slice(0, 3);
+  const terminZeileKurz = (x) => {
+    const tg = tageBis(x.datum);
+    const rechts = x.frist ? (tg < 0 ? pille("überfällig", "rot") : tg === 0 ? "heute" : tg <= 14 ? `in ${tg} Tagen` : wtDatum(x.datum)) : wtDatum(x.datum);
+    const datumRechts = !x.frist || (tg > 14);
+    const unter = [datumRechts ? "" : wtDatum(x.datum), x.uhrzeit, x.ort ? x.ort.split(",")[0] : ""].filter(Boolean).join(" · ");
+    return `<button class="zeile" data-go="#/kalender"><div class="haupt"><span class="titel">${esc(x.titel)}</span>${unter ? `<span class="unter">${esc(unter)}</span>` : ""}</div><span class="gedimmt" style="font-size:14px;white-space:nowrap">${rechts}</span>${CHEV}</button>`;
+  };
+  const ergebnisse = (st.letzte_ergebnisse || []).slice(0, 3).map((e) => `<button class="zeile" data-go="#/spiel/${encodeURIComponent(e.key)}">
+    <div class="haupt"><span class="titel">${esc(teamName(e.mannschaft) || e.team)} ${e.heim ? "gegen" : "bei"} ${esc(e.gegner)}</span><span class="unter">${esc(wtDatum(e.datum))}</span></div>
+    ${pille(`${e.ergebnis[0]}:${e.ergebnis[1]}`, ergebnisArt(e.ergebnis))}${CHEV}</button>`).join("");
+  const geb = (d.kalender?.termine || []).filter((x) => x.bereich === "Geburtstage" && tageBis(x.datum) >= 0 && tageBis(x.datum) <= 7);
   const liveHinweis = d.liveInfo ? `<span class="hinweis">Tabellenplätze${d.liveInfo.spiele ? " und Spielplan" : ""} von mytischtennis.de, zuletzt geprüft ${esc(dmy(d.liveInfo.geprueft))}</span>` : "";
-  const links = `${abschnitt("Nächste Spiele", "Kalender", "#/kalender/spiele")}${spielKarten || `<div class="karte"><span class="leer">Keine Spiele in den nächsten Wochen.</span></div>`}${liveHinweis}
-    <div class="karte dicht">${`<div style="padding:14px 14px 4px">${kartenTitel("Letzte Ergebnisse", "Spielbetrieb", "#/spiele")}</div>`}${(st.letzte_ergebnisse || []).slice(0, 5).map(ergebnisZeile).join("") || `<div class="zeile"><span class="leer">Noch keine Spielberichte.</span></div>`}</div>`;
-  const rechts = `<div class="karte">${kartenTitel("Termine und Fristen", "Kalender", "#/kalender")}${termine.map((x) => terminZeile(x)).join("") || `<span class="leer">Keine anstehenden Termine.</span>`}</div>
-    ${geb.length ? `<div class="karte">${kartenTitel("Geburtstage")}${geb.map((x) => `<div style="display:flex;align-items:center;gap:10px">${pille(tageBis(x.datum) === 0 ? "heute" : wtDatum(x.datum), "rosa")}<span style="font-size:14px${x.rund ? ";font-weight:700" : ""}">${esc(x.name || x.titel)} <span class="gedimmt">wird ${x.alter ?? ""}</span></span></div>`).join("")}</div>` : ""}
-    ${istVorstand() && (st.zu_erledigen || []).length ? `<div class="karte">${kartenTitel("Zu erledigen")}${st.zu_erledigen.slice(0, 6).map((z) => `<div style="display:flex;gap:8px;font-size:14px"><span style="color:var(--p-gelb)">•</span><span>${esc(z.text)}</span></div>`).join("")}<span class="hinweis" style="padding:0">Stand beim letzten Speichern am PC</span></div>` : ""}
-    ${leben.length ? `<div class="karte dicht"><div style="padding:14px 14px 4px">${kartenTitel("Zuletzt im Vereinsleben", "Vereinsleben", "#/vereinsleben")}</div>${leben.map(lebenZeile).join("")}</div>` : ""}`;
-  const kopfGanz = `<header class="kopf">
-    <div class="kopf-zeile" style="gap:12px"><div class="marke-logo nur-handy" style="width:40px;height:40px;border-radius:10px;font-size:14px">08</div>
-      <div style="display:flex;flex-direction:column;flex:1;min-width:0"><span style="font-size:18px;font-weight:700">${esc(m.verein_kurz)}</span><span class="klein gedimmt" style="font-size:13px">${esc(gruss())}</span></div>
-      <span class="pille" style="gap:5px">${ic("schloss", 12)}Nur Ansicht</span></div>
-    ${kopfStand()}</header>`;
+
+  const kopfGanz = `<header class="kopf start-kopf">
+    <div class="kopf-zeile" style="gap:14px"><img class="wappen nur-handy" src="wappen.png" alt="Wappen TTV Werragrund 08">
+      <div style="display:flex;flex-direction:column;flex:1;min-width:0"><span class="vereinsname">${esc(m.verein_kurz)}</span><span class="gedimmt" style="font-size:15px">${esc(gruss())}</span></div></div>
+    ${kopfStand(true)}</header>`;
+  const links = `${abschnitt("Nächste Spiele")}<div class="karte dicht">${spiele || `<div class="zeile"><span class="leer">Keine Spiele in den nächsten Wochen.</span></div>`}</div>${liveHinweis}
+    ${abschnitt("Letzte Ergebnisse", "Alle", "#/spiele")}<div class="karte dicht">${ergebnisse || `<div class="zeile"><span class="leer">Noch keine Spielberichte.</span></div>`}</div>`;
+  const rechts = `${abschnitt("Termine", "Alle", "#/kalender")}<div class="karte dicht">${termine.map(terminZeileKurz).join("") || `<div class="zeile"><span class="leer">Keine anstehenden Termine.</span></div>`}</div>
+    ${geb.map((x) => `<div style="display:flex;align-items:center;gap:8px;padding:2px 4px">${pille(tageBis(x.datum) === 0 ? "heute" : tageBis(x.datum) === 1 ? "morgen" : wtDatum(x.datum), "rosa")}<span style="font-size:14px">${esc(x.name || x.titel)} wird ${x.alter ?? ""}</span></div>`).join("")}`;
   return {
     titel: "Start", kopfGanz,
-    inhalt: `<div class="kacheln">${kacheln.join("")}</div>
-      <div style="display:grid;gap:12px" class="start-raster">${`<div style="display:flex;flex-direction:column;gap:12px;min-width:0">${links}</div><div style="display:flex;flex-direction:column;gap:12px;min-width:0">${rechts}</div>`}</div>`,
+    inhalt: `${kacheln}<div style="display:grid;gap:12px" class="start-raster"><div style="display:flex;flex-direction:column;gap:12px;min-width:0">${links}</div><div style="display:flex;flex-direction:column;gap:12px;min-width:0">${rechts}</div></div>`,
   };
 };
 // Je Mannschaft das nächste Spiel ab heute – mit Tabellenplätzen aus der neuesten Tabelle und der Bilanz gegen den Verein
@@ -778,14 +776,15 @@ function lebenZeile(e) {
 
 // ===================================================================================================== Kalender
 SEITEN.kalender = ([vorfilter]) => {
-  const a = ansicht("kalender", { filter: "alle", vergangene: "" });
+  const a = ansicht("kalender", { filter: "alle", vergangene: "", geb: "" });
   if (vorfilter && a._vor !== vorfilter) { a.filter = vorfilter; a._vor = vorfilter; }
   const alle = S.daten.kalender?.termine || [];
   const t = heute();
-  const passt = (x) => a.filter === "alle" ? true : a.filter === "spiele" ? x.spiel : a.filter === "fristen" ? x.frist : x.bereich === a.filter;
+  const passt = (x) => (x.bereich !== "Geburtstage" || a.geb || a.filter === "Geburtstage")
+    && (a.filter === "alle" ? true : a.filter === "spiele" ? x.spiel : a.filter === "fristen" ? x.frist : x.bereich === a.filter);
   const liste = alle.filter((x) => passt(x) && (a.vergangene ? datum(x.datum) < t : (datum(x.datum) >= t || (x.bis && datum(x.bis) >= t) || (x.frist && x.status === "überfällig"))));
   if (a.vergangene) liste.reverse();
-  const bereiche = [...new Set(alle.map((x) => x.bereich))].filter((b) => b !== "Spielbetrieb");
+  const bereiche = [...new Set(alle.map((x) => x.bereich))].filter((b) => b !== "Spielbetrieb" && b !== "Geburtstage");
   let html = "", monat = "";
   for (const x of liste) {
     const d = datum(x.datum), mk = `${MONATE[d.getMonth()]} ${d.getFullYear()}`;
@@ -795,7 +794,9 @@ SEITEN.kalender = ([vorfilter]) => {
   if (monat) html += "</div>";
   return {
     titel: "Kalender",
-    kopf: `${chips("kalender", "filter", [["alle", "Alle"], ["spiele", "Spiele"], ["fristen", "Fristen"], ...bereiche.map((b) => [b, b])], a.filter)}`,
+    kopf: `<div class="chips">${[["alle", "Alle"], ["spiele", "Spiele"], ["fristen", "Fristen"], ...bereiche.map((b) => [b, b])].map(([w, t]) =>
+      `<button class="chip ${w === a.filter ? "aktiv" : ""}" data-akt="setze" data-feld="kalender.filter" data-wert="${esc(w)}">${esc(t)}</button>`).join("")}
+      <button class="chip ${a.geb ? "aktiv" : ""}" data-akt="umschalten" data-feld="kalender.geb" data-wert="1">${a.geb ? "Geburtstage ausblenden" : "Geburtstage einblenden"}</button></div>`,
     inhalt: `${html || `<div class="karte"><span class="leer">${a.vergangene ? "Keine vergangenen Termine (60 Tage)." : "Keine anstehenden Termine."}</span></div>`}
       <button class="knopf" data-akt="umschalten" data-feld="kalender.vergangene" data-wert="1">${a.vergangene ? "Kommende Termine zeigen" : "Vergangene Termine zeigen"}</button>
       <span class="hinweis">Termine, Fristen, Spiele aus den Kalender-Abos und Geburtstage – wie im Vereinskalender am PC.</span>`,
@@ -878,6 +879,18 @@ function spieleAnsicht() {
   const sb = SB();
   return ansicht("spiele", { tab: "ergebnisse", saison: sb.aktuelle_saison || sb.saisons[0] || "*", hs: "", team: "" });
 }
+function saisonKnopf(a, mitAlle, mitHalbserie = true) {
+  if (!mitAlle && a.saison === "*") a.saison = SB().aktuelle_saison || SB().saisons[0];
+  const hs = mitHalbserie ? a.hs : "";
+  const opt = [];
+  if (mitAlle) opt.push(["*|", "Alle Saisons"], ["*|Vorrunde", "Alle Saisons · Vorrunden"], ["*|Rückrunde", "Alle Saisons · Rückrunden"]);
+  for (const s of SB().saisons) {
+    opt.push([`${s}|`, `${s} · ganze Saison`]);
+    if (mitHalbserie) opt.push([`${s}|Vorrunde`, `${s} · Vorrunde`], [`${s}|Rückrunde`, `${s} · Rückrunde`]);
+  }
+  const wert = `${a.saison}|${hs}`;
+  return `<label class="saisonknopf"><select data-feld="spiele.saisonhs" aria-label="Saison und Halbserie">${opt.map(([w, t]) => `<option value="${esc(w)}" ${w === wert ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>${ic("chevunten", 14)}</label>`;
+}
 function saisonAuswahl(a, mitAlle) {
   const opt = (mitAlle ? [["*", "Alle Saisons"]] : []).concat(SB().saisons.map((s) => [s, s]));
   if (!mitAlle && a.saison === "*") a.saison = SB().aktuelle_saison || SB().saisons[0];
@@ -889,8 +902,8 @@ SEITEN.spiele = () => {
   const tabs = [["ergebnisse", "Ergebnisse"], ["tabellen", "Tabellen"], ["bilanzen", "Bilanzen"], ["aufstellung", "Aufstellung"]];
   const inhalt = { ergebnisse: tabErgebnisse, tabellen: tabTabellen, bilanzen: tabBilanzen, aufstellung: tabAufstellung }[a.tab](a);
   return {
-    titel: "Spielbetrieb",
-    kopf: `${segmente("spiele", "tab", tabs, a.tab)}<div class="kopf-auswahl">${a.tab === "tabellen" ? saisonAuswahl(a, false).split("</select>")[0] + "</select>" : saisonAuswahl(a, a.tab === "bilanzen")}</div>`,
+    titel: "Spielbetrieb", rechts: saisonKnopf(a, a.tab === "bilanzen", a.tab !== "tabellen"),
+    kopf: segmente("spiele", "tab", tabs, a.tab),
     inhalt,
   };
 };
@@ -898,18 +911,16 @@ function tabErgebnisse(a) {
   const saison = a.saison === "*" ? SB().aktuelle_saison : a.saison;
   const spiele = spieleFilter({ saison, hs: a.hs }).filter((s) => s.ergebnis);
   const bil = mannschaftsbilanz(spiele);
-  const karten = bil.map((m) => {
+  const kacheln = bil.length ? `<div class="kacheln zwei">${bil.map((m) => {
     const tp = tabellenPlatz(saison, m.nr);
-    return `<div class="karte" style="flex-direction:row;align-items:center;gap:12px">
-      <div style="width:52px;height:52px;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center" class="${tp && tp.platz <= 3 ? "pille gruen" : "pille blau"}"><b style="font-size:20px">${tp ? tp.platz + "." : "–"}</b><span style="font-size:10px;font-weight:500">Platz</span></div>
-      <div style="display:flex;flex-direction:column;flex:1;min-width:0"><span style="font-weight:700">${esc(teamName(m.nr))}</span><span class="klein gedimmt">${esc(tp?.liga || m.liga)} · ${m.pk[0]}:${m.pk[1]} Punkte · ${m.s}/${m.u}/${m.n}</span></div></div>`;
-  }).join("");
+    return `<div class="kachel" style="cursor:default"><span class="k">${esc(teamName(m.nr))}</span><span class="w">${tp ? tp.platz + ". Platz" : `${m.s}/${m.u}/${m.n}`}</span><span class="u">${m.pk[0]}:${m.pk[1]} Punkte</span></div>`;
+  }).join("")}</div>` : "";
   const nachTeam = {};
   for (const s of spiele) (nachTeam[s.mannschaft] = nachTeam[s.mannschaft] || []).push(s);
-  const listen = Object.keys(nachTeam).sort((x, y) => x - y).map((nr) => `<div class="karte dicht"><div class="gruppe-kopf">${esc(teamName(Number(nr)))}<span>${esc(nachTeam[nr][0].liga)}</span></div>
-    ${nachTeam[nr].map((s) => ergebnisZeile({ key: s.key, ergebnis: s.ergebnis, begegnung: s.heim ? `${teamName(s.mannschaft)} – ${s.gegner}` : `${s.gegner} – ${teamName(s.mannschaft)}`, stand: s.heim ? `${s.ergebnis[0]}:${s.ergebnis[1]}` : `${s.ergebnis[1]}:${s.ergebnis[0]}`, datum: s.datum, liga: `${s.halbserie}${s.heim ? " · Heimspiel" : " · auswärts"}` })).join("")}</div>`).join("");
-  return `${karten}${listen || `<div class="karte"><span class="leer">Für diese Auswahl sind keine Spielberichte eingelesen.</span></div>`}
-    <span class="hinweis">Antippen zeigt Aufstellung, Einzel, Doppel und den Spielbericht (PDF).</span>`;
+  const listen = Object.keys(nachTeam).sort((x, y) => x - y).map((nr) => `${abschnitt(teamName(Number(nr)))}<div class="karte dicht">
+    ${nachTeam[nr].map((s) => `<button class="zeile" data-go="#/spiel/${encodeURIComponent(s.key)}"><div class="haupt"><span class="titel">${s.heim ? "gegen" : "bei"} ${esc(s.gegner)}</span><span class="unter">${esc(wtDatum(s.datum))}</span></div>
+      ${pille(`${s.ergebnis[0]}:${s.ergebnis[1]}`, ergebnisArt(s.ergebnis))}${CHEV}</button>`).join("")}</div>`).join("");
+  return `${kacheln}${listen || `<div class="karte"><span class="leer">Für diese Auswahl sind keine Spielberichte eingelesen.</span></div>`}`;
 }
 const ZEICHEN = { auf: "▲", rel_auf: "△", ab: "▼", rel_ab: "▽", zurueck: "✕" };
 function tabTabellen(a) {
@@ -923,6 +934,13 @@ function tabTabellen(a) {
     </tbody></table></div>`).join("") + `<span class="hinweis">Stand der Tabelle: ${esc(dmy(t.stand))}${t.live ? " (von mytischtennis.de, automatisch abgerufen)" : ""}. ▲ Aufstieg · △ Relegation · ▼ Abstieg</span>`;
 }
 function tabBilanzen(a) {
+  const unter = a.bil || "spieler";
+  const reiter = `<div class="chips">${[["mannschaften", "Mannschaften"], ["spieler", "Spieler"], ["doppel", "Doppel"], ["gegner", "Gegner"]].map(([w, t]) =>
+    `<button class="chip ${w === unter ? "aktiv" : ""}" data-akt="setze" data-feld="spiele.bil" data-wert="${w}">${t}</button>`).join("")}</div>`;
+  const teile = tabBilanzTeile(a);
+  return reiter + teile[unter];
+}
+function tabBilanzTeile(a) {
   const spiele = spieleFilter({ saison: a.saison, hs: a.hs });
   const mb = mannschaftsbilanz(spiele);
   const sp = spielerbilanz(spiele);
@@ -934,30 +952,34 @@ function tabBilanzen(a) {
   const meist = top(alleGegner, { filter: () => true, sort: (x, y) => y.beg - x.beg });
   const ersteSaison = SB().saisons[SB().saisons.length - 1] || "";
   const zeigeAlle = ansicht("spiele").alleSpieler, zeigeAlleD = ansicht("spiele").alleDoppel;
-  return `${abschnitt("Mannschaftsbilanz")}
+  return { mannschaften: `
     <div class="karte dicht">${mb.map((m) => `<div style="padding:12px 14px;border-bottom:1px solid var(--gitter);display:flex;flex-direction:column;gap:8px">
       <div style="display:flex;align-items:baseline;gap:8px"><span style="font-weight:700;flex:1">${esc(teamName(m.nr))}</span><span class="klein gedimmt">${esc(m.liga)}</span></div>
       <div class="raster4"><div class="wert"><span class="k">Beg.</span><span class="w">${m.beg}</span></div><div class="wert"><span class="k">S / U / N</span><span class="w">${m.s} / ${m.u} / ${m.n}</span></div><div class="wert"><span class="k">Spiele</span><span class="w">${m.sp[0]} : ${m.sp[1]}</span></div><div class="wert"><span class="k">Punkte</span><span class="w">${m.pk[0]} : ${m.pk[1]}</span></div></div>
       ${bal(m.s, m.u, m.n)}
       <a class="link" style="display:flex;justify-content:space-between;min-height:30px;align-items:center" data-akt="gegnerTeam" data-wert="${m.nr}"><span>Bilanz gegen alle Gegner</span><span>›</span></a></div>`).join("") || `<div class="zeile"><span class="leer">Keine Spiele in dieser Auswahl.</span></div>`}</div>
-    ${abschnitt("Spielerbilanz · Einzel")}
+`,
+    spieler: `
     <div class="karte dicht">${(zeigeAlle ? sp : sp.slice(0, 8)).map((p) => `<button class="zeile" ${SB().spieler[p.pid] ? `data-go="#/spieler/${encodeURIComponent(p.pid)}"` : ""}>
       ${avatar(p.name.split(", ")[1] || "", p.name.split(", ")[0])}
       <div class="haupt" style="gap:4px"><div style="display:flex;align-items:baseline;gap:6px"><span class="titel" style="font-size:14px;flex:1">${esc(p.name)}</span><span class="unter">${p.team ? esc(teamName(p.team)) : ""}</span></div>
         <div class="balken" style="height:5px"><div class="a" style="width:${proz(p.e[0], p.e[1])}%"></div></div></div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;width:70px"><span class="fett zahl">${p.e[0]} : ${p.e[1]}</span><span class="klein gedimmt">Doppel ${p.d[0]} : ${p.d[1]}</span></div></button>`).join("") || `<div class="zeile"><span class="leer">Keine Einzel in dieser Auswahl.</span></div>`}
       ${sp.length > 8 ? `<button class="zeile" data-akt="umschalten" data-feld="spiele.alleSpieler" data-wert="1" style="justify-content:center;color:var(--accent);font-weight:600">${zeigeAlle ? "Weniger zeigen" : `Alle ${sp.length} Spieler zeigen`}</button>` : ""}</div>
-    ${abschnitt("Doppel")}
+`,
+    doppel: `
     <div class="karte dicht">${(zeigeAlleD ? dp : dp.slice(0, 5)).map((x) => `<div class="zeile"><div class="haupt" style="gap:4px"><span class="titel" style="font-size:14px">${esc(spielerName(x.a.pid, x.a.name).split(",")[0])} / ${esc(spielerName(x.b.pid, x.b.name).split(",")[0])}</span>
         <div class="balken" style="height:5px"><div class="a" style="width:${proz(x.d[0], x.d[1])}%"></div></div></div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;width:78px"><span class="fett zahl">${x.d[0]} : ${x.d[1]}</span><span class="klein gedimmt">Sätze ${x.saetze[0]} : ${x.saetze[1]}</span></div></div>`).join("") || `<div class="zeile"><span class="leer">Keine Doppel in dieser Auswahl.</span></div>`}
       ${dp.length > 5 ? `<button class="zeile" data-akt="umschalten" data-feld="spiele.alleDoppel" data-wert="1" style="justify-content:center;color:var(--accent);font-weight:600">${zeigeAlleD ? "Weniger zeigen" : `Alle ${dp.length} Doppel zeigen`}</button>` : ""}</div>
-    ${abschnitt(`Gegner · seit ${ersteSaison}`, "Alle Gegnerbilanzen", "#/gegner")}
+`,
+    gegner: `<span class="hinweis">Alle Saisons seit ${esc(ersteSaison)}</span>
     <div class="karte dicht">
       ${siege ? `<button class="zeile" data-go="#/gegner/${encodeURIComponent(siege.verein)}"><div class="haupt"><span class="unter">Meiste Siege</span><span class="titel" style="font-size:14px">${esc(siege.verein)}</span></div>${pille(`${siege.s} Siege`, "gruen")}</button>` : ""}
       ${nl ? `<button class="zeile" data-go="#/gegner/${encodeURIComponent(nl.verein)}"><div class="haupt"><span class="unter">Meiste Niederlagen</span><span class="titel" style="font-size:14px">${esc(nl.verein)}</span></div>${pille(`${nl.n} Niederlagen`, "rot")}</button>` : ""}
       ${meist ? `<button class="zeile" data-go="#/gegner/${encodeURIComponent(meist.verein)}"><div class="haupt"><span class="unter">Meiste Begegnungen</span><span class="titel" style="font-size:14px">${esc(meist.verein)}</span></div>${pille(`${meist.beg} Spiele`, "blau")}</button>` : ""}
-    </div>`;
+    </div><a class="knopf" data-go="#/gegner">Alle Gegnerbilanzen</a>`,
+  };
 }
 AKTIONEN.gegnerTeam = (el) => { const g = ansicht("gegner", { team: "", suche: "", sort: "beg", offen: "" }); g.team = el.dataset.wert; g.offen = ""; geh("#/gegner"); };
 function tabAufstellung(a) {
@@ -1073,7 +1095,6 @@ SEITEN.mehr = () => {
     inhalt: `<div class="karte dicht nur-handy">
         ${menuZeile("#/organisation", "org", "blau", "Vereinsorganisation", "Versammlungen, Vorstand, Satzung, Finanzamt, Training")}
         ${menuZeile("#/vereinsleben", "leben", "rosa", "Vereinsleben", "Feste, Ausflüge, Turniere mit Bildern")}
-        ${istVorstand() ? menuZeile("#/finanzen", "fin", "gruen", "Finanzen", "Kontostand und offene Beiträge") : ""}
         ${menuZeile("#/dokumente", "dok", "gelb", "Dokumente", "Alle PDFs nach Bereich")}</div>
       ${abschnitt("Auf diesem Gerät")}
       <div class="karte dicht">
@@ -1093,10 +1114,10 @@ SEITEN.mehr = () => {
 };
 
 // ===================================================================================================== Organisation
-SEITEN.organisation = () => {
+SEITEN.organisation = ([tabParam]) => {
   const o = S.daten.organisation || {};
-  const a = ansicht("organisation", { tab: "uebersicht" });
-  const tabs = [["uebersicht", "Übersicht"], ["versammlungen", "Versammlungen"], ["vorstand", "Vorstand und Satzung"], ["finanzamt", "Finanzamt und Register"], ["training", "Training und Spiellokale"], ["berichte", "Tätigkeitsberichte"]];
+  const a = { tab: tabParam || "uebersicht" };
+  const tabs = [["uebersicht", "Organisation"], ["versammlungen", "Versammlungen"], ["vorstand", "Vorstand und Satzung"], ["finanzamt", "Finanzamt und Register"], ["training", "Training und Spiellokale"], ["berichte", "Tätigkeitsberichte"]];
   const t = heute();
   const vers = o.versammlungen || [];
   const kommend = vers.filter((v) => datum(v.datum) >= t).sort((x, y) => x.datum.localeCompare(y.datum));
@@ -1135,11 +1156,21 @@ SEITEN.organisation = () => {
     ${alle && e.kuendigungsfrist ? `<div class="trenner"></div><div class="karte dicht" style="border:0">${[["Kündigung", e.kuendigungsfrist], ["Beitrag fällig", e.beitragsfaelligkeit], ["Versammlung", e.mitgliederversammlung], ["Zweck", e.satzungszweck]].filter(([, w]) => w).map(([k, w]) => `<div class="kv" style="padding-left:0;padding-right:0"><span class="k">${k}</span><span class="w">${esc(w)}</span></div>`).join("")}</div>` : ""}</div>`;
   const berichteKarte = `<div class="karte">${kartenTitel("Tätigkeitsberichte")}${(o.taetigkeitsberichte || []).map((d) => pdfZeile(d, d.datum ? dmy(d.datum) : "PDF")).join("") || `<span class="leer">Noch keine Tätigkeitsberichte abgelegt.</span>`}</div>`;
   const versKarte = (alle) => `<div class="karte">${kartenTitel("Versammlungen")}${kommend.map(versZeile).join("")}${(alle ? vergangen : vergangen.slice(0, 2)).map(versZeile).join("") || (kommend.length ? "" : `<span class="leer">Keine Versammlungen erfasst.</span>`)}</div>`;
+  // Übersicht: eine Zeile je Bereich mit Kurzstatus, Einzelheiten nach Antippen
+  const naechste = kommend[0];
+  const tage = [...new Set(wochenplan.map((z) => z.tag_text.slice(0, 2)))].join(" · ");
+  const bereichZeile = (tab, titel, rechts, unter) => `<button class="zeile" data-go="#/organisation/${tab}"><div class="haupt"><span class="titel">${esc(titel)}</span>${unter ? `<span class="unter">${esc(unter)}</span>` : ""}</div><span class="gedimmt" style="font-size:14px;white-space:nowrap">${rechts}</span>${CHEV}</button>`;
+  const uebersicht = `<div class="karte dicht">
+    ${bereichZeile("versammlungen", "Versammlungen", naechste ? esc(dmy(naechste.datum, false)) : "", naechste ? "nächste: " + naechste.titel : `${vers.length} erfasst`)}
+    ${bereichZeile("vorstand", "Vorstand und Satzung", o.amtszeit_ende ? "bis " + esc(String(o.amtszeit_ende).slice(0, 4)) : "", o.letzte_wahl ? "gewählt am " + dmy(o.letzte_wahl) : "")}
+    ${bereichZeile("finanzamt", "Finanzamt und Register", e.gemeinnuetzig_bis ? pille("gemeinnützig", tageBis(e.gemeinnuetzig_bis) < 90 ? "gelb" : "gruen") : "", e.gemeinnuetzig_bis ? "bis " + dmy(e.gemeinnuetzig_bis) : "")}
+    ${bereichZeile("training", "Training und Spiellokale", esc(tage), (o.orte || []).map((x) => x.name.split(" ").slice(-1)[0]).join(", "))}
+    ${bereichZeile("berichte", "Tätigkeitsberichte", String((o.taetigkeitsberichte || []).length), "")}</div>`;
   const inhalt = {
-    uebersicht: versKarte(false) + vorstandKarte(false) + finanzamtKarte + wochenKarte + berichteKarte,
-    versammlungen: versKarte(true), vorstand: vorstandKarte(true), finanzamt: finanzamtKarte, training: wochenKarte, berichte: berichteKarte,
-  }[a.tab];
-  return { titel: "Organisation", zurueck: ["#/mehr", "Mehr"], kopf: chips("organisation", "tab", tabs, a.tab), inhalt };
+    uebersicht, versammlungen: versKarte(true), vorstand: vorstandKarte(true), finanzamt: finanzamtKarte, training: wochenKarte, berichte: berichteKarte,
+  }[a.tab] || uebersicht;
+  const titel = (tabs.find(([w]) => w === a.tab) || [0, "Organisation"])[1];
+  return a.tab === "uebersicht" ? { titel: "Organisation", zurueck: ["#/mehr", "Mehr"], inhalt } : { titel, zurueck: ["#/organisation", "Organisation"], inhalt };
 };
 
 SEITEN.versammlung = ([id]) => {
@@ -1166,33 +1197,10 @@ SEITEN.versammlung = ([id]) => {
       : `<div class="karte"><span class="leer">Noch kein Protokoll erfasst.</span>${dok("protokoll").map((d) => pdfZeile({ ...d, titel: "Protokoll (PDF)" })).join("")}</div>`;
   }
   return {
-    titel: v.titel, zurueck: ["#/organisation", "Organisation"],
+    titel: v.titel, zurueck: ["#/organisation/versammlungen", "Versammlungen"],
     kopf: `<span class="klein gedimmt" style="margin-top:-6px;font-size:13px">${esc(WT_LANG[datum(v.datum).getDay()])}, ${dmy(v.datum)}${v.uhrzeit ? " · " + esc(v.uhrzeit) : ""}${v.ort ? " · " + esc(v.ort) : ""}</span>
       ${segmente("versammlung", "tab", [["kurz", "Kurzfassung"], ["einladung", "Einladung"], ["protokoll", "Protokoll"]], a.tab)}`,
     inhalt,
-  };
-};
-
-// ===================================================================================================== Finanzen (Überblick)
-SEITEN.finanzen = () => {
-  const f = S.daten.finanzen;
-  if (!istVorstand() || !f) return { titel: "Finanzen", zurueck: ["#/mehr", "Mehr"], inhalt: `<div class="karte"><span class="leer">Keine Finanzdaten.</span></div>` };
-  const b = f.beitraege;
-  return {
-    titel: "Finanzen", rechts: "Überblick", zurueck: ["#/mehr", "Mehr"],
-    inhalt: `<div class="karte" style="gap:4px"><span class="klein gedimmt" style="font-size:13px">Kontostand</span><span style="font-size:32px;font-weight:700;letter-spacing:-0.5px" class="zahl">${eur(f.kontostand)}</span>
-        <span class="klein gedimmt">laut letztem Kontoauszug${f.stand ? " vom " + dmy(f.stand) : ""}</span>
-        <div class="trenner" style="margin:10px 0 6px"></div>
-        <div style="display:flex"><span class="gedimmt" style="flex:1;font-size:14px">Kontostand 01.01.${f.jahr}</span><span class="zahl fett" style="font-size:14px">${eur(f.anfang)}</span></div>
-        <div style="display:flex"><span class="gedimmt" style="flex:1;font-size:14px">Einnahmen ${f.jahr}</span><span class="zahl fett" style="font-size:14px;color:var(--p-gruen)">+ ${eur(f.einnahmen)}</span></div>
-        <div style="display:flex"><span class="gedimmt" style="flex:1;font-size:14px">Ausgaben ${f.jahr}</span><span class="zahl fett" style="font-size:14px;color:var(--p-rot)">− ${eur(f.ausgaben)}</span></div></div>
-      <div class="karte dicht"><div style="padding:14px;display:flex;flex-direction:column;gap:8px">${kartenTitel(`Beiträge ${f.jahr}`)}
-        ${b.daten ? `<div style="display:flex;align-items:baseline;gap:6px"><span style="font-size:22px;font-weight:700">${b.bezahlt} von ${b.mitglieder}</span><span class="gedimmt" style="font-size:13px">bezahlt</span></div>
-        <div class="balken" style="height:8px"><div class="s" style="width:${b.mitglieder ? (100 * b.bezahlt) / b.mitglieder : 0}%"></div></div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">${b.offen.length ? pille(`${b.offen.length} offen · ${eur(b.offen_summe)}`, "gelb") : pille("alle bezahlt", "gruen")}${pille(`eingegangen ${eur(b.eingegangen)} von ${eur(b.soll)}`)}</div>`
-        : `<span class="leer">Für ${f.jahr} sind noch keine Kontoumsätze eingelesen.</span>`}</div>
-        ${b.offen.map((o) => `<div class="zeile"><div class="haupt"><span class="titel" style="font-size:14px">${esc(o.name)}</span><span class="unter">Satz ${esc(o.satz)} · ${o.bezahlt ? eur(o.bezahlt) + " gezahlt" : "noch nichts gezahlt"}</span></div><span class="fett zahl">${eur(o.offen)}</span></div>`).join("")}</div>
-      <span class="hinweis">Buchungen, Belege und Jahresabschluss bleiben im PC-Programm.</span>`,
   };
 };
 
@@ -1270,6 +1278,29 @@ SEITEN.dokumente = () => ({
 });
 
 // ===================================================================================================== Start der App
+// Ziehen zum Aktualisieren (oben am Inhalt nach unten ziehen)
+(function ziehenZumAktualisieren() {
+  let y0 = null, weg = 0, anzeige = null;
+  document.addEventListener("touchstart", (e) => {
+    const inhalt = e.target.closest(".inhalt");
+    y0 = inhalt && inhalt.scrollTop <= 0 && S.daten && !S.laedt && e.touches.length === 1 ? e.touches[0].clientY : null; weg = 0;
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (y0 == null) return;
+    weg = e.touches[0].clientY - y0;
+    if (weg > 10) {
+      if (!anzeige) { anzeige = document.createElement("div"); anzeige.className = "ziehen"; document.body.appendChild(anzeige); }
+      anzeige.textContent = weg > 80 ? "Loslassen zum Aktualisieren" : "Zum Aktualisieren ziehen";
+      anzeige.style.opacity = Math.min(1, weg / 80);
+    }
+  }, { passive: true });
+  document.addEventListener("touchend", () => {
+    if (anzeige) { anzeige.remove(); anzeige = null; }
+    if (y0 != null && weg > 80) { if (S.quelle === "google" || Google.angemeldet()) { ladeVonGoogle(); ladeLive(); } else toast("Im Testmodus gibt es nichts zu aktualisieren."); }
+    y0 = null; weg = 0;
+  });
+})();
+
 async function starte() {
   thema();
   const zurueckVonGoogle = Google.rueckkehr();
