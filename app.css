@@ -272,3 +272,18 @@ img.logo-gross { background: none; object-fit: contain; width: 110px; height: 11
 .eintrag { border-bottom: 1px solid var(--gitter); }
 .eintrag:last-child { border-bottom: 0; }
 .eintrag > .zeile { border-bottom: 0; }
+/* Formanalyse (Spielplan von mytischtennis.de) */
+.form { display: inline-flex; gap: 3px; vertical-align: middle; }
+.form .f { width: 20px; height: 20px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; background: var(--surface2); }
+.form.klein .f { width: 16px; height: 16px; font-size: 9.5px; border-radius: 4px; }
+.form .f.gruen { background: var(--p-gruen-bg); color: var(--p-gruen); }
+.form .f.gelb { background: var(--p-gelb-bg); color: var(--p-gelb); }
+.form .f.rot { background: var(--p-rot-bg); color: var(--p-rot); }
+.formblock { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--surface2); }
+.fz { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fz .k { font-size: 13px; color: var(--muted); min-width: 86px; }
+.tabelle td .form { display: inline-flex; }
+.tabelle td.formzelle { padding-left: 2px; padding-right: 6px; white-space: nowrap; }
+.tabelle .form { gap: 2px; }
+.tabelle .form .f { width: 13px; height: 15px; font-size: 8.5px; border-radius: 3px; }

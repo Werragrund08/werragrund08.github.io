@@ -292,7 +292,9 @@ async function abmelden() {
 // GitHub holt alle paar Stunden die öffentlichen Tabellen und Spielpläne von mytischtennis.de (live.json neben der App).
 // Sind sie neuer als die Datei vom PC, ersetzen sie dort Tabellen und Spieltermine. Spielberichte, eigene Termine und
 // alles andere kommen weiter vom PC.
-const LIVE_URLS = ["live.json", "https://raw.githubusercontent.com/Werragrund08/werragrund08.github.io/main/live.json"];
+// Seit 17.11.2026 abgeschaltet: mytischtennis.de sperrt Abrufe von GitHub (HTTP 429). Tabellen, Spielpläne und die
+// Formanalyse kommen jetzt mit der Datei vom PC (Spielplan wird dort täglich mit der Tabelle geladen).
+const LIVE_URLS = [];
 async function ladeLive() {
   if (!navigator.onLine || !S.roh) return;
   let bestes = null;
@@ -400,7 +402,7 @@ const REITER = [
   { id: "start", titel: "Start", icon: "start", seiten: ["start"] },
   { id: "mitglieder", titel: "Mitglieder", icon: "mitglieder", seiten: ["mitglieder", "mitglied"] },
   { id: "kalender", titel: "Kalender", icon: "kalender", seiten: ["kalender"] },
-  { id: "spiele", titel: "Spiele", icon: "spiele", seiten: ["spiele", "spiel", "gegner", "spieler"] },
+  { id: "spiele", titel: "Spiele", icon: "spiele", seiten: ["spiele", "spiel", "gegner", "spieler", "form"] },
   { id: "mehr", titel: "Mehr", icon: "mehr", seiten: ["mehr", "organisation", "versammlung", "vereinsleben", "eintrag", "dokumente"] },
 ];
 // Seitenleiste auf dem iPad: alles direkt erreichbar
@@ -408,7 +410,7 @@ const NAV_GROSS = [
   { hash: "#/start", titel: "Start", icon: "start", seiten: ["start"] },
   { hash: "#/mitglieder", titel: "Mitglieder", icon: "mitglieder", seiten: ["mitglieder", "mitglied"] },
   { hash: "#/kalender", titel: "Kalender", icon: "kalender", seiten: ["kalender"] },
-  { hash: "#/spiele", titel: "Spielbetrieb", icon: "spiele", seiten: ["spiele", "spiel", "gegner", "spieler"] },
+  { hash: "#/spiele", titel: "Spielbetrieb", icon: "spiele", seiten: ["spiele", "spiel", "gegner", "spieler", "form"] },
   { hash: "#/vereinsleben", titel: "Vereinsleben", icon: "leben", seiten: ["vereinsleben", "eintrag"] },
   { hash: "#/organisation", titel: "Organisation", icon: "org", seiten: ["organisation", "versammlung"] },
   { hash: "#/dokumente", titel: "Dokumente", icon: "dok", seiten: ["dokumente"] },
@@ -617,6 +619,7 @@ SEITEN.start = () => {
     const plaetze = s.platz ? ` · wir ${s.platz}. · Gegner ${s.platz_gegner ? s.platz_gegner + "." : "–"}` : "";
     const details = offen ? `<div class="aufklapp-inhalt" style="padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px">
         <span class="klein gedimmt">${esc(WT_LANG[datum(s.datum).getDay()])}, ${dmy(s.datum)}${s.uhrzeit ? " · " + esc(s.uhrzeit) : ""}${s.ort ? " · " + esc(s.ort.split(",")[0]) : ""}</span>
+        ${s.analyse ? formBlock(s) : ""}
         ${b.begegnungen ? `<div style="display:flex;align-items:center;gap:10px"><div class="snu"><span class="s">${b.siege} S</span><span class="u">${b.unentschieden} U</span><span class="n">${b.niederlagen} N</span></div><div style="flex:1">${bal(b.siege, b.unentschieden, b.niederlagen)}</div></div>
           <span class="klein gedimmt">${b.begegnungen} Begegnung${b.begegnungen === 1 ? "" : "en"} seit ${esc(b.seit)}${b.bester ? ` · beste Einzelbilanz: ${esc(b.bester[0])} ${b.bester[1]}:${b.bester[2]}` : ""}</span>
           ${(b.letzte || []).map((x) => `<button class="zeile" style="padding:6px 0;min-height:34px;border:0" data-go="#/spiel/${encodeURIComponent(x.key)}"><span class="haupt"><span style="font-size:14px">${esc(x.halbserie === "Rückrunde" ? "RR" : "VR")} ${esc(x.saison)} · ${x.heim ? "Heim" : "auswärts"}</span></span>${pille(`${x.ergebnis[0]}:${x.ergebnis[1]}`, ergebnisArt(x.ergebnis))}</button>`).join("")}`
@@ -694,6 +697,57 @@ function bilanzGegen(gegner) {
     .map((s) => ({ datum: s.datum, key: s.key, ergebnis: s.ergebnis, heim: s.heim, saison: s.saison, halbserie: s.halbserie }));
   return { begegnungen: x.beg, siege: x.s, unentschieden: x.u, niederlagen: x.n, seit: x.seit, bester: null, letzte };
 }
+// ===================================================================================================== Formanalyse
+// Aus dem Spielplan von mytischtennis.de (vom PC berechnet: spielbetrieb.ligen_analyse, start.naechste_spiele[].analyse)
+const FORM_ART = { S: "gruen", U: "gelb", N: "rot" };
+function formPunkte(liste) {
+  return liste && liste.length ? `<span class="form" aria-label="Form ${esc(liste.join(" "))}">${liste.map((x) => `<span class="f ${FORM_ART[x] || ""}">${esc(x)}</span>`).join("")}</span>`
+    : `<span class="klein gedimmt">noch keine Spiele</span>`;
+}
+function bilanzKurz(b) { return b && b.begegnungen ? `${b.s}-${b.u}-${b.n} · ${b.punkte[0]}:${b.punkte[1]} Punkte` : "noch keine Spiele"; }
+function formBlock(s) {
+  const a = s.analyse, vg = a.vergleich, b = s.heim ? a.auswaerts : a.heim;
+  return `<div class="formblock">
+    <div class="fz"><span class="k">Form Gegner</span>${formPunkte(a.form)}</div>
+    <div class="fz"><span class="k">Unsere Form</span>${formPunkte(a.wir_form)}</div>
+    ${a.serie || a.wir_serie ? `<span class="klein gedimmt">${[a.serie ? `Gegner: ${esc(a.serie)}` : "", a.wir_serie ? `Wir: ${esc(a.wir_serie)}` : ""].filter(Boolean).join(" · ")}</span>` : ""}
+    <span class="klein gedimmt">Gegner ${s.heim ? "auswärts" : "zu Hause"}: ${esc(bilanzKurz(b))}</span>
+    ${vg ? `<span class="klein gedimmt">Gemeinsame Gegner (${vg.gegner}): wir ${vg.punkte[0]}, Gegner ${vg.punkte[1]} Punkte</span>` : ""}
+    <a class="link" data-go="#/form/${encodeURIComponent(a.liga)}/${encodeURIComponent(a.name)}">Formanalyse ›</a></div>`;
+}
+function ligaAnalyse(liga, saison) {
+  const alle = SB().ligen_analyse || [];
+  return alle.find((x) => norm(x.liga) === norm(liga) && (!saison || x.saison === saison)) || null;
+}
+const staende = (liste) => liste.map((e) => `${e.eigen}:${e.gegen}`).join(" ");
+SEITEN.form = ([liga, team]) => {
+  const an = (SB().ligen_analyse || []).find((x) => x.liga === liga) || null;
+  const t = an?.teams?.[team];
+  if (!t) return { titel: "Formanalyse", zurueck: ["#/spiele", "Spielbetrieb"], inhalt: `<div class="karte"><span class="leer">Für diese Mannschaft gibt es keinen Spielplan.</span></div>` };
+  const platz = (an.tabellen.gesamt || []).find((z) => z.name === team)?.platz;
+  const letzte = t.letzte.slice().reverse().map((e) => `<div class="zeile"><span class="gedimmt" style="width:52px;font-size:14px">${dmy(e.datum).slice(0, 6)}</span>
+    <div class="haupt"><span class="titel" style="font-size:14px">${e.heim ? "gegen" : "bei"} ${esc(e.gegner)}</span>${e.kampflos ? `<span class="unter">kampflos</span>` : ""}</div>${pille(`${e.eigen}:${e.gegen}`, FORM_ART[e.art])}</div>`).join("");
+  const vergleich = Object.entries(t.vergleich || {}).map(([nr, vg]) => {
+    const wir = teamName(Number(nr));
+    return `${abschnitt(`Gemeinsame Gegner mit ${wir}`)}<div class="karte dicht">
+      <div class="zeile" style="min-height:40px"><span class="klein gedimmt" style="flex:1">${vg.gegner} gemeinsame Gegner</span><span class="fett">wir ${vg.punkte[0]} · sie ${vg.punkte[1]} Punkte</span></div>
+      ${vg.zeilen.map((z) => `<div class="zeile" style="font-size:14px"><span style="flex:1;min-width:0">${esc(z.gegner)}</span><span class="zahl" style="width:64px;text-align:right">${esc(staende(z.wir))}</span><span class="zahl gedimmt" style="width:64px;text-align:right">${esc(staende(z.sie))}</span></div>`).join("")}</div>
+      <span class="hinweis">Links unsere Ergebnisse, rechts die von ${esc(team)} – jeweils aus eigener Sicht.</span>`;
+  }).join("");
+  const rest = t.rest?.spiele || [];
+  return {
+    titel: team, verlaufTitel: "Formanalyse", zurueck: ["#/spiele", "Spielbetrieb"],
+    inhalt: `<div class="karte" style="gap:10px"><span class="klein gedimmt">${esc(an.liga)} ${esc(an.saison)}${platz ? ` · Platz ${platz} (aus dem Spielplan berechnet)` : ""}</span>
+        <div class="fz"><span class="k">Form</span>${formPunkte(t.form)}${t.serie ? `<span class="klein gedimmt">${esc(t.serie)}</span>` : ""}</div>
+        <div class="raster4" style="grid-template-columns:1fr 1fr"><div class="wert"><span class="k">Heim</span><span class="w" style="font-size:15px">${esc(bilanzKurz(t.heim))}</span></div><div class="wert"><span class="k">Auswärts</span><span class="w" style="font-size:15px">${esc(bilanzKurz(t.auswaerts))}</span></div></div></div>
+      ${letzte ? `${abschnitt("Letzte Spiele")}<div class="karte dicht">${letzte}</div>` : ""}
+      ${vergleich}
+      ${rest.length ? `${abschnitt(`Restprogramm${t.rest.runde ? " " + t.rest.runde : ""}`)}<div class="karte dicht">${rest.slice(0, 10).map((x) => `<div class="zeile"><span class="gedimmt" style="width:52px;font-size:14px">${dmy(x.datum).slice(0, 6)}</span><div class="haupt"><span class="titel" style="font-size:14px">${x.heim ? "gegen" : "bei"} ${esc(x.gegner)}</span></div>${x.platz ? `<span class="klein gedimmt">${x.platz}.</span>` : ""}</div>`).join("")}</div>
+        ${t.rest.schnitt ? `<span class="hinweis">Gegner im Schnitt auf Platz ${String(t.rest.schnitt).replace(".", ",")}</span>` : ""}` : ""}
+      <span class="hinweis">Aus dem Spielplan von mytischtennis.de berechnet${an.zeit ? `, Stand ${esc(dmy(an.zeit.slice(0, 10)))}` : ""}.</span>`,
+  };
+};
+
 function gegnerVerein(name) { return String(name || "").replace(/\s+(I|II|III|IV|V|VI|VII|VIII|IX|X)$/u, "").trim(); }
 
 // ===================================================================================================== Mitglieder
@@ -918,7 +972,7 @@ function tabErgebnisse(a) {
   const nachTeam = {};
   for (const s of spiele) (nachTeam[s.mannschaft] = nachTeam[s.mannschaft] || []).push(s);
   const listen = Object.keys(nachTeam).sort((x, y) => x - y).map((nr) => `${abschnitt(teamName(Number(nr)))}<div class="karte dicht">
-    ${nachTeam[nr].map((s) => `<button class="zeile" data-go="#/spiel/${encodeURIComponent(s.key)}"><div class="haupt"><span class="titel">${s.heim ? "gegen" : "bei"} ${esc(s.gegner)}</span><span class="unter">${esc(wtDatum(s.datum))}</span></div>
+    ${nachTeam[nr].map((s) => `<button class="zeile" data-go="#/spiel/${encodeURIComponent(s.key)}"><div class="haupt"><span class="titel">${s.heim ? "gegen" : "bei"} ${esc(s.gegner)}</span><span class="unter">${esc(wtDatum(s.datum))}${s.nur_ergebnis ? " · ohne Spielbericht" : ""}</span></div>
       ${pille(`${s.ergebnis[0]}:${s.ergebnis[1]}`, ergebnisArt(s.ergebnis))}${CHEV}</button>`).join("")}</div>`).join("");
   return `${kacheln}${listen || `<div class="karte"><span class="leer">Für diese Auswahl sind keine Spielberichte eingelesen.</span></div>`}`;
 }
@@ -926,11 +980,23 @@ const ZEICHEN = { auf: "▲", rel_auf: "△", ab: "▼", rel_ab: "▽", zurueck:
 function tabTabellen(a) {
   const saison = a.saison === "*" ? SB().aktuelle_saison : a.saison;
   const t = SB().tabellen?.[saison];
-  if (!t) return `<div class="karte"><span class="leer">Für ${esc(saison)} ist keine Tabelle eingelesen.</span></div>`;
-  return t.ligen.filter((l) => l.zeilen.some((z) => z.eigen)).concat(t.ligen.filter((l) => !l.zeilen.some((z) => z.eigen))).map((l) => `<div class="karte" style="padding:12px 4px 4px">
+  const art = a.tart || "tabelle";
+  const hatAnalyse = (SB().ligen_analyse || []).some((x) => x.saison === saison);
+  const auswahl = hatAnalyse ? `<div class="chips">${[["tabelle", "Tabelle"], ["form", "Form"], ["heim", "Heim"], ["auswaerts", "Auswärts"]].map(([w, txt]) =>
+    `<button class="chip ${w === art ? "aktiv" : ""}" data-akt="setze" data-feld="spiele.tart" data-wert="${w}">${txt}</button>`).join("")}</div>` : "";
+  if (art !== "tabelle" && hatAnalyse) {
+    return auswahl + (SB().ligen_analyse || []).filter((x) => x.saison === saison).map((an) => `<div class="karte" style="padding:12px 4px 4px">
+      <div style="padding:0 10px">${kartenTitel(an.liga)}</div>
+      <table class="tabelle"><thead><tr><th>Pl.</th><th>Mannschaft</th><th>Sp.</th><th>Punkte</th><th>Form</th></tr></thead><tbody>
+      ${(an.tabellen[art] || []).map((z) => `<tr class="${z.eigen ? "eigen" : ""}" data-go="#/form/${encodeURIComponent(an.liga)}/${encodeURIComponent(z.name)}" style="cursor:pointer"><td>${z.platz}</td><td>${esc(z.name)}</td><td>${z.begegnungen}</td><td>${z.punkte.join(":")}</td><td class="formzelle">${formPunkte(z.form.slice(-5))}</td></tr>`).join("")}
+      </tbody></table></div>`).join("") + `<span class="hinweis">${art === "form" ? "Nur die letzten fünf Spiele je Mannschaft." : art === "heim" ? "Nur Heimspiele." : "Nur Auswärtsspiele."} Aus dem Spielplan von mytischtennis.de berechnet · Mannschaft antippen: Formanalyse</span>`;
+  }
+  if (!t) return auswahl + `<div class="karte"><span class="leer">Für ${esc(saison)} ist keine Tabelle eingelesen.</span></div>`;
+  return auswahl + t.ligen.filter((l) => l.zeilen.some((z) => z.eigen)).concat(t.ligen.filter((l) => !l.zeilen.some((z) => z.eigen))).map((l) => `<div class="karte" style="padding:12px 4px 4px">
     <div style="padding:0 10px">${kartenTitel(l.liga)}</div>
     <table class="tabelle"><thead><tr><th>Pl.</th><th>Mannschaft</th><th>Sp.</th><th>Spiele</th><th>Punkte</th></tr></thead><tbody>
-    ${l.zeilen.map((z) => `<tr class="${z.eigen ? "eigen" : ""}"><td>${z.platz ?? ""}</td><td>${esc(z.name)} ${z.zeichen && ZEICHEN[z.zeichen] ? `<span class="zeichen" style="color:${z.zeichen.includes("ab") || z.zeichen === "zurueck" ? "var(--p-rot)" : "var(--p-gruen)"}">${ZEICHEN[z.zeichen]}</span>` : ""}</td><td>${z.beg ?? ""}</td><td>${z.spiele ? z.spiele.join(":") : ""}</td><td>${z.punkte ? z.punkte.join(":") : ""}</td></tr>`).join("")}
+    ${l.zeilen.map((z) => { const an = ligaAnalyse(l.liga, saison); const tn = an && Object.keys(an.teams).find((n) => norm(n) === norm(z.name) || (z.eigen && an.eigene[n] === z.mannschaft));
+      return `<tr class="${z.eigen ? "eigen" : ""}"${tn ? ` data-go="#/form/${encodeURIComponent(an.liga)}/${encodeURIComponent(tn)}" style="cursor:pointer"` : ""}><td>${z.platz ?? ""}</td><td>${esc(z.name)} ${z.zeichen && ZEICHEN[z.zeichen] ? `<span class="zeichen" style="color:${z.zeichen.includes("ab") || z.zeichen === "zurueck" ? "var(--p-rot)" : "var(--p-gruen)"}">${ZEICHEN[z.zeichen]}</span>` : ""}</td><td>${z.beg ?? ""}</td><td>${z.spiele ? z.spiele.join(":") : ""}</td><td>${z.punkte ? z.punkte.join(":") : ""}</td></tr>`; }).join("")}
     </tbody></table></div>`).join("") + `<span class="hinweis">Stand der Tabelle: ${esc(dmy(t.stand))}${t.live ? " (von mytischtennis.de, automatisch abgerufen)" : ""}. ▲ Aufstieg · △ Relegation · ▼ Abstieg</span>`;
 }
 function tabBilanzen(a) {
@@ -1012,11 +1078,13 @@ SEITEN.spiel = ([key]) => {
         <div class="spiel-kopf"><span class="team">${esc(h)}</span><span class="stand" style="color:var(--${ergebnisArt(e) === "gruen" ? "p-gruen" : ergebnisArt(e) === "rot" ? "p-rot" : "text"})">${stand}</span><span class="team">${esc(g)}</span></div>
         <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap">${pille(s.saison + " · " + s.halbserie)}${s.saetze ? pille(`Sätze ${s.saetze[0]}:${s.saetze[1]}`) : ""}${s.baelle ? pille(`Bälle ${s.baelle[0]}:${s.baelle[1]}`) : ""}${s.genehmigt ? pille("genehmigt", "gruen") : ""}</div>
         ${s.pdf ? `<button class="knopf" data-datei="${esc(s.pdf)}">${ic("pdf", 18)}Spielbericht öffnen</button>` : ""}</div>
+      ${s.nur_ergebnis ? `<div class="karte"><span style="font-weight:600">Spielbericht noch nicht verfügbar</span><span class="klein gedimmt">Das Ergebnis kommt aus dem Spielplan von mytischtennis.de${s.kampflos ? " (kampflos)" : ""}. Sobald der Bericht veröffentlicht ist, lädt ihn das Programm am PC selbst – dann stehen hier Einzel, Doppel und Aufstellung.</span></div>
+      <a class="link" style="text-align:center;padding:6px" data-go="#/gegner/${encodeURIComponent(s.gegner_verein)}">Alle Spiele gegen ${esc(s.gegner_verein)} ›</a>` : `
       ${abschnitt("Einzel und Doppel")}<div class="karte dicht">${partien || `<div class="zeile"><span class="leer">Keine Partien im Bericht.</span></div>`}</div>
       ${abschnitt("Aufstellung")}<div class="karte dicht" style="display:grid;grid-template-columns:1fr 1fr">
         <div>${s.aufstellung.map((x) => `<div class="zeile" style="font-size:13.5px"><span class="gedimmt" style="width:24px">${esc(x.rang)}</span>${SB().spieler[x.pid] ? `<a data-go="#/spieler/${encodeURIComponent(x.pid)}">${esc(x.name)}</a>` : esc(x.name)}</div>`).join("")}</div>
         <div style="border-left:1px solid var(--gitter)">${s.aufstellung_gegner.map((x) => `<div class="zeile" style="font-size:13.5px"><span class="gedimmt" style="width:24px">${esc(x.rang)}</span>${esc(x.name)}</div>`).join("")}</div></div>
-      <a class="link" style="text-align:center;padding:6px" data-go="#/gegner/${encodeURIComponent(s.gegner_verein)}">Alle Spiele gegen ${esc(s.gegner_verein)} ›</a>`,
+      <a class="link" style="text-align:center;padding:6px" data-go="#/gegner/${encodeURIComponent(s.gegner_verein)}">Alle Spiele gegen ${esc(s.gegner_verein)} ›</a>`}`,
   };
 };
 
