@@ -9,7 +9,7 @@
 const CFG = Object.assign({ googleClientId: "", dateiName: "mobil_daten.json.gz", ordnerName: "Handy-App" },
   window.APP_CONFIG || {});
 const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
-const VERSION_APP = "1.0";
+const VERSION_APP = "2.0 (v10)";
 
 // ===================================================================================================== Helfer
 const $ = (sel, wurzel = document) => wurzel.querySelector(sel);
@@ -495,7 +495,7 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("input", (e) => {
   const el = e.target.closest("[data-feld]");
-  if (!el) return;
+  if (!el || el.tagName === "SELECT") return; // Auswahllisten: erst bei „change“ (sonst geht das change-Ereignis am neu gezeichneten Element verloren)
   const [seite, feld] = el.dataset.feld.split(".");
   ansicht(seite)[feld] = el.value;
   if (el.dataset.teil && TEILE[el.dataset.teil]) {
@@ -547,7 +547,11 @@ function pdfZeile(d, meta = "PDF") {
   if (!d) return "";
   return `<button class="zeile" data-datei="${esc(d.datei || "")}" style="padding-left:0;padding-right:0;border-bottom:0;min-height:40px"><span style="color:var(--danger);display:flex">${ic("pdf")}</span><span class="haupt"><span style="font-size:14px">${esc(d.titel)}</span></span><span class="gedimmt klein">${esc(meta || (d.datum ? dmy(d.datum) : ""))}</span></button>`;
 }
-function datumsblock(iso) { const d = datum(iso); return d ? `<div class="datumsblock"><span>${WT[d.getDay()]}</span><b>${d.getDate()}</b></div>` : ""; }
+function datumsblock(iso) {
+  const d = datum(iso); if (!d) return "";
+  const t = heute(), anders = d.getMonth() !== t.getMonth() || d.getFullYear() !== t.getFullYear();
+  return `<div class="datumsblock"><span>${WT[d.getDay()]}</span><b>${d.getDate()}</b>${anders ? `<small>${MON[d.getMonth()]}${d.getFullYear() !== t.getFullYear() ? " " + String(d.getFullYear()).slice(2) : ""}</small>` : ""}</div>`;
+}
 function avatar(vor, nach, klasse = "") { return `<div class="avatar f${farbIndex(nach + vor)} ${klasse}">${esc(initialen(vor, nach).toUpperCase())}</div>`; }
 
 // ===================================================================================================== Anmeldung
@@ -584,102 +588,84 @@ function offeneFristen(tage = 30) {
     && (datum(x.datum) >= t || x.status === "überfällig" || datum(x.datum) >= new Date(t.getTime() - 60 * 86400000)))
     .sort((a, b) => a.datum.localeCompare(b.datum));
 }
-function terminZeile(t, mitDatum = true) {
-  const tg = tageBis(t.datum);
-  let p = "";
-  if (t.frist) {
-    p = t.status === "erledigt" ? pille("erledigt", "gruen") : tg < 0 ? pille("überfällig", "rot") : tg <= 14 ? pille(tg === 0 ? "heute" : `in ${tg} Tagen`, "gelb") : pille("Frist", "gelb");
-  }
-  const meta = [t.uhrzeit, t.ort ? t.ort.split(",")[0] : "", t.text && !t.spiel ? t.text : t.bereich].filter(Boolean).join(" · ");
-  return `<div class="zeile" style="padding-left:0;padding-right:0;gap:12px">${mitDatum ? datumsblock(t.datum) : ""}
-    <div class="streifen" style="background:${esc(t.farbe || "var(--accent)")}"></div>
-    <div class="haupt"><span class="titel" style="font-size:14px">${esc(t.titel)}</span><span class="unter">${esc(meta)}</span></div>${p}</div>`;
+// ===================================================================================================== Bausteine (seit v10, Stil wie das PC-Programm 4.2.1)
+// Kachel mit farbigem Strich: Titel, Wert, Unterzeile mit Sprung „›“ (wie qt_design.Kachel)
+function kachel2({ titel, wert, unter = "", farbe = "var(--accent)", ziel = "", akt = "", feld = "", wertArt = "", balken = null, aktiv = false }) {
+  const tag = ziel || akt ? "button" : "div";
+  const attr = ziel ? `data-go="${ziel}"` : akt ? `data-akt="${akt}" data-feld="${feld}" data-wert="${esc(wert)}"` : "";
+  return `<${tag} class="kachel2 ${aktiv ? "aktiv" : ""}" ${attr} style="--k:${farbe}"><span class="strich"></span><span class="ki">
+    <span class="k">${esc(titel)}</span><span class="w ${wertArt}">${esc(wert)}</span>${unter ? `<span class="u">${esc(unter)}</span>` : ""}
+    ${balken != null ? `<span class="kbalken"><span style="width:${Math.max(0, Math.min(100, balken))}%"></span></span>` : ""}</span></${tag}>`;
 }
-function ergebnisZeile(e) {
-  return `<button class="zeile" data-go="#/spiel/${encodeURIComponent(e.key)}">
-    <div class="streifen" style="background:var(--${e.ergebnis[0] > e.ergebnis[1] ? "bar-sieg" : e.ergebnis[0] < e.ergebnis[1] ? "bar-nl" : "bar-remis"})"></div>
-    <div class="haupt"><span class="titel" style="font-size:14px">${esc(e.begegnung)}</span><span class="unter">${esc(wtDatum(e.datum))} · ${esc(e.liga)}</span></div>
-    ${pille(e.stand || `${e.ergebnis[0]}:${e.ergebnis[1]}`, ergebnisArt(e.ergebnis) + " gross")}</button>`;
+// Kachel als Filter: Antippen setzt bzw. löst den Filter (data-akt umschalten)
+function filterKachel(seite, feld, wert, aktuell, opts) {
+  return kachel2({ ...opts, akt: "umschaltenWert", feld: `${seite}.${feld}|${wert}`, aktiv: aktuell === wert });
 }
-
-SEITEN.start = () => {
-  const d = S.daten, st = d.start || {}, m = d.meta, t = heute();
-  const k = st.mitglieder || {};
-  const fristen = offeneFristen();
-  const a = ansicht("start", { offen: "" });
-  const kacheln = `<div class="kacheln zwei">
-    <button class="kachel" data-go="#/mitglieder"><span class="k">Mitglieder</span><span class="w">${k.gesamt ?? "–"}</span></button>
-    <button class="kachel" data-go="#/kalender/fristen"><span class="k">Fristen offen</span><span class="w" style="${fristen.length ? "color:var(--p-gelb)" : ""}">${fristen.length}</span></button></div>`;
-
-  // Nächste Spiele: zwei Zeilen je Mannschaft; Antippen klappt Bilanz und letzte Begegnungen auf
-  const spiele = naechsteSpiele().map((s) => {
-    const b = s.bilanz || {};
-    const offen = a.offen === String(s.mannschaft);
-    const einord = s.einordnung ? pille(s.einordnung.replace("Duell auf Augenhöhe", "Augenhöhe"), s.einordnung === "Spitzenspiel" ? "blau" : s.einordnung === "Kellerduell" ? "rot" : s.einordnung === "Favorit" ? "gruen" : s.einordnung === "Außenseiter" ? "gelb" : "") : "";
-    const plaetze = s.platz ? ` · wir ${s.platz}. · Gegner ${s.platz_gegner ? s.platz_gegner + "." : "–"}` : "";
-    const details = offen ? `<div class="aufklapp-inhalt" style="padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px">
-        <span class="klein gedimmt">${esc(WT_LANG[datum(s.datum).getDay()])}, ${dmy(s.datum)}${s.uhrzeit ? " · " + esc(s.uhrzeit) : ""}${s.ort ? " · " + esc(s.ort.split(",")[0]) : ""}</span>
-        ${s.analyse ? formBlock(s) : ""}
-        ${b.begegnungen ? `<div style="display:flex;align-items:center;gap:10px"><div class="snu"><span class="s">${b.siege} S</span><span class="u">${b.unentschieden} U</span><span class="n">${b.niederlagen} N</span></div><div style="flex:1">${bal(b.siege, b.unentschieden, b.niederlagen)}</div></div>
-          <span class="klein gedimmt">${b.begegnungen} Begegnung${b.begegnungen === 1 ? "" : "en"} seit ${esc(b.seit)}${b.bester ? ` · beste Einzelbilanz: ${esc(b.bester[0])} ${b.bester[1]}:${b.bester[2]}` : ""}</span>
-          ${(b.letzte || []).map((x) => `<button class="zeile" style="padding:6px 0;min-height:34px;border:0" data-go="#/spiel/${encodeURIComponent(x.key)}"><span class="haupt"><span style="font-size:14px">${esc(x.halbserie === "Rückrunde" ? "RR" : "VR")} ${esc(x.saison)} · ${x.heim ? "Heim" : "auswärts"}</span></span>${pille(`${x.ergebnis[0]}:${x.ergebnis[1]}`, ergebnisArt(x.ergebnis))}</button>`).join("")}`
-        : `<span class="klein gedimmt">Noch keine Begegnung in den Spielberichten.</span>`}
-        <a class="link" data-go="#/gegner/${encodeURIComponent(gegnerVerein(s.gegner))}">Alle Spiele gegen ${esc(gegnerVerein(s.gegner))} ›</a></div>` : "";
-    return `<div class="eintrag"><button class="zeile" style="gap:12px" data-akt="umschalten" data-feld="start.offen" data-wert="${s.mannschaft}">${datumsblock(s.datum)}
-      <div class="haupt"><span class="titel">${s.heim ? "gegen" : "bei"} ${esc(s.gegner)}</span><span class="unter">${esc(s.team)}${esc(plaetze)}</span></div>${einord}</button>${details}</div>`;
-  }).join("");
-
-  const termine = (d.kalender?.termine || []).filter((x) => x.bereich !== "Geburtstage" && !x.spiel && !["erledigt", "vorbei"].includes(x.status)
-    && (datum(x.datum) >= t || (x.bis && datum(x.bis) >= t) || (x.frist && x.status === "überfällig"))).slice(0, 3);
-  const terminZeileKurz = (x) => {
-    const tg = tageBis(x.datum);
-    const rechts = x.frist ? (tg < 0 ? pille("überfällig", "rot") : tg === 0 ? "heute" : tg <= 14 ? `in ${tg} Tagen` : wtDatum(x.datum)) : wtDatum(x.datum);
-    const datumRechts = !x.frist || (tg > 14);
-    const unter = [datumRechts ? "" : wtDatum(x.datum), x.uhrzeit, x.ort ? x.ort.split(",")[0] : ""].filter(Boolean).join(" · ");
-    return `<button class="zeile" data-go="#/kalender"><div class="haupt"><span class="titel">${esc(x.titel)}</span>${unter ? `<span class="unter">${esc(unter)}</span>` : ""}</div><span class="gedimmt" style="font-size:14px;white-space:nowrap">${rechts}</span>${CHEV}</button>`;
-  };
-  const ergebnisse = (st.letzte_ergebnisse || []).slice(0, 3).map((e) => `<button class="zeile" data-go="#/spiel/${encodeURIComponent(e.key)}">
-    <div class="haupt"><span class="titel">${esc(teamName(e.mannschaft) || e.team)} ${e.heim ? "gegen" : "bei"} ${esc(e.gegner)}</span><span class="unter">${esc(wtDatum(e.datum))}</span></div>
-    ${pille(`${e.ergebnis[0]}:${e.ergebnis[1]}`, ergebnisArt(e.ergebnis))}${CHEV}</button>`).join("");
-  const geb = (d.kalender?.termine || []).filter((x) => x.bereich === "Geburtstage" && tageBis(x.datum) >= 0 && tageBis(x.datum) <= 7);
-  const liveHinweis = d.liveInfo ? `<span class="hinweis">Tabellenplätze${d.liveInfo.spiele ? " und Spielplan" : ""} von mytischtennis.de, zuletzt geprüft ${esc(dmy(d.liveInfo.geprueft))}</span>` : "";
-
-  const kopfGanz = `<header class="kopf start-kopf">
-    <div class="kopf-zeile" style="gap:14px"><img class="wappen nur-handy" src="wappen.png" alt="Wappen TTV Werragrund 08">
-      <div style="display:flex;flex-direction:column;flex:1;min-width:0"><span class="vereinsname">${esc(m.verein_kurz)}</span><span class="gedimmt" style="font-size:15px">${esc(gruss())}</span></div></div>
-    ${kopfStand(true)}</header>`;
-  const links = `${abschnitt("Nächste Spiele")}<div class="karte dicht">${spiele || `<div class="zeile"><span class="leer">Keine Spiele in den nächsten Wochen.</span></div>`}</div>${liveHinweis}
-    ${abschnitt("Letzte Ergebnisse", "Alle", "#/spiele")}<div class="karte dicht">${ergebnisse || `<div class="zeile"><span class="leer">Noch keine Spielberichte.</span></div>`}</div>`;
-  const rechts = `${abschnitt("Termine", "Alle", "#/kalender")}<div class="karte dicht">${termine.map(terminZeileKurz).join("") || `<div class="zeile"><span class="leer">Keine anstehenden Termine.</span></div>`}</div>
-    ${geb.map((x) => `<div style="display:flex;align-items:center;gap:8px;padding:2px 4px">${pille(tageBis(x.datum) === 0 ? "heute" : tageBis(x.datum) === 1 ? "morgen" : wtDatum(x.datum), "rosa")}<span style="font-size:14px">${esc(x.name || x.titel)} wird ${x.alter ?? ""}</span></div>`).join("")}`;
-  return {
-    titel: "Start", kopfGanz,
-    inhalt: `${kacheln}<div style="display:grid;gap:12px" class="start-raster"><div style="display:flex;flex-direction:column;gap:12px;min-width:0">${links}</div><div style="display:flex;flex-direction:column;gap:12px;min-width:0">${rechts}</div></div>`,
-  };
+AKTIONEN.umschaltenWert = (el) => {
+  const f = el.dataset.feld, i = f.indexOf("|"), pfad = f.slice(0, i), wert = f.slice(i + 1); const [seite, feld] = pfad.split(".");
+  const a = ansicht(seite); a[feld] = a[feld] === wert ? "" : wert; zeige();
 };
-// Je Mannschaft das nächste Spiel ab heute – mit Tabellenplätzen aus der neuesten Tabelle und der Bilanz gegen den Verein
-function naechsteSpiele() {
-  const d = S.daten, t = heute(), ex = d.start?.naechste_spiele || [], gesehen = new Set();
-  const kandidaten = d.liveInfo?.spiele
-    ? (d.kalender?.termine || []).filter((k) => k.spiel && k.mannschaft && k.gegner).map((k) => ({
-      datum: k.datum, uhrzeit: k.uhrzeit, ort: k.ort, mannschaft: k.mannschaft, team: k.team || teamName(k.mannschaft),
-      gegner: k.gegner, heim: k.heim, begegnung: k.titel }))
-    : ex;
-  const saison = SB().aktuelle_saison;
-  return kandidaten.filter((s) => datum(s.datum) >= t && !gesehen.has(s.mannschaft) && gesehen.add(s.mannschaft)).map((s) => {
-    const alt = ex.find((x) => x.mannschaft === s.mannschaft && norm(x.gegner) === norm(s.gegner)) || {};
-    const tp = tabellenPlatz(saison, s.mannschaft);
-    let platzGegner = alt.platz_gegner ?? null, anzahl = alt.anzahl ?? null;
-    if (tp) {
-      const liga = (SB().tabellen?.[saison]?.ligen || []).find((l) => l.liga === tp.liga);
-      const g = norm(s.gegner);
-      const z = liga && (liga.zeilen.find((r) => norm(r.name) === g) || liga.zeilen.find((r) => !r.eigen && g && (norm(r.name).includes(g) || g.includes(norm(r.name)))));
-      anzahl = liga ? liga.zeilen.length : anzahl; platzGegner = z ? z.platz : platzGegner;
-    }
-    const platz = tp ? tp.platz : alt.platz ?? null;
-    return { ...alt, ...s, liga: tp?.liga || alt.liga || "", platz, platz_gegner: platzGegner, anzahl,
-      einordnung: einordnung(platz, platzGegner, anzahl), bilanz: alt.bilanz || bilanzGegen(s.gegner) };
+function formKaestchen(liste, klein = false) {
+  return liste && liste.length ? `<span class="form ${klein ? "klein" : ""}" aria-label="Form ${esc(liste.join(" "))}">${liste.map((x) => `<span class="f ${FORM_ART[x] || ""}">${esc(x)}</span>`).join("")}</span>` : "";
+}
+// Mannschaftsfarbe wie im Kalender (Abo-Farbe der Mannschaft)
+function teamFarbe(nr) {
+  const t = (S.daten.kalender?.termine || []).find((x) => x.spiel && x.mannschaft === nr && x.farbe);
+  return t ? t.farbe : ["#2563a8", "#d9622b", "#1d8a88", "#7a4fc0", "#c0397a"][((nr || 1) - 1) % 5];
+}
+const ROEMISCH = ["", "", "II", "III", "IV", "V", "VI", "VII", "VIII"];
+// Eigene Mannschaft wie am PC (ta.anzeige_name): „TTV Werragrund 08“, „TTV Werragrund 08 II“ …
+function vereinsTeam(nr) { const v = S.daten.meta?.verein_kurz || "Verein"; return nr > 1 ? `${v} ${ROEMISCH[nr] || nr}` : v; }
+function streifen(farbe) { return `<span class="streifen" style="background:${esc(farbe)}"></span>`; }
+const EINORDNUNG_ART = { Spitzenspiel: "blau", Kellerduell: "rot", Favorit: "gruen", Außenseiter: "gelb", "Duell auf Augenhöhe": "" };
+function einordnungPille(e) { return e ? pille(e.replace("Duell auf Augenhöhe", "Augenhöhe"), EINORDNUNG_ART[e] ?? "") : ""; }
+function ohneLiga(name) { return String(name || "").replace(/\s*\([^)]*\)\s*$/, "").trim(); }
+const isoPlus = (iso, tage) => { const d = datum(iso); d.setDate(d.getDate() + tage); return isoTag(d); };
+function wochentagNr(d) { return (d.getDay() + 6) % 7; } // Mo = 0 wie im Wochenplan
+
+// ===================================================================================================== Kommende Spiele
+// Alle Spieltermine ab heute (Kalender-Abos), angereichert um Tabellenplätze, Punkte, Form beider Mannschaften und Bilanz
+function kommendeSpiele() {
+  const d = S.daten, t = isoTag(heute()), ex = d.start?.naechste_spiele || [];
+  let liste = (d.kalender?.termine || []).filter((k) => k.spiel && k.mannschaft && k.datum >= t).map((k) => {
+    const teile = String(k.titel || "").split(" – ");
+    const heim = teile.length === 2 ? norm(teile[0]).startsWith(norm(d.meta?.verein_kurz || "")) : true;
+    const gegner = teile.length === 2 ? (heim ? teile[1] : teile[0]) : k.titel;
+    return { datum: k.datum, uhrzeit: k.uhrzeit, ort: k.ort, mannschaft: k.mannschaft, team: teamName(k.mannschaft), gegner, heim, farbe: k.farbe };
   });
+  if (!liste.length) liste = ex.map((s) => ({ ...s, farbe: teamFarbe(s.mannschaft) }));
+  liste.sort((a, b) => (a.datum + (a.uhrzeit || "")).localeCompare(b.datum + (b.uhrzeit || "")));
+  return liste.map((s) => spielAnreichern(s, ex.find((x) => x.datum === s.datum && x.mannschaft === s.mannschaft)));
+}
+function spielAnreichern(s, alt = {}) {
+  alt = alt || {};
+  const saison = SB().aktuelle_saison, tp = tabellenPlatz(saison, s.mannschaft);
+  const liga = tp && (SB().tabellen?.[saison]?.ligen || []).find((l) => l.liga === tp.liga);
+  const g = norm(ohneLiga(s.gegner));
+  const zg = liga && (liga.zeilen.find((r) => norm(r.name) === g) || liga.zeilen.find((r) => !r.eigen && g && (norm(r.name).includes(g) || g.includes(norm(r.name)))));
+  const an = tp ? ligaAnalyse(tp.liga, saison) : null;
+  const eigenName = an && Object.keys(an.eigene || {}).find((n) => an.eigene[n] === s.mannschaft);
+  const gegnerName = an && (Object.keys(an.teams).find((n) => norm(n) === g) || Object.keys(an.teams).find((n) => !an.eigene[n] && (norm(n).includes(g) || g.includes(norm(n)))));
+  const tg = gegnerName ? an.teams[gegnerName] : null, te = eigenName ? an.teams[eigenName] : null;
+  const platz = tp ? tp.platz : alt.platz ?? null, platzGegner = zg ? zg.platz : alt.platz_gegner ?? null, anzahl = liga ? liga.zeilen.length : alt.anzahl ?? null;
+  const eigeneForm = te?.form?.length ? te.form.slice(-5) : formAusSpielen(s.mannschaft, 5);
+  return { ...alt, ...s, gegner: ohneLiga(s.gegner), liga: tp?.liga || alt.liga || "", platz, platz_gegner: platzGegner, anzahl,
+    punkte: tp?.punkte || null, punkte_gegner: zg?.punkte || null, form: eigeneForm, form_gegner: tg?.form?.slice(-5) || alt.analyse?.form || [],
+    serie_gegner: tg?.serie || "", analyse_gegner: tg, analyse_liga: an, gegner_name: gegnerName,
+    vergleich: tg?.vergleich?.[s.mannschaft] || (alt.analyse?.vergleich ?? null),
+    einordnung: einordnung(platz, platzGegner, anzahl), bilanz: alt.bilanz?.begegnungen ? alt.bilanz : bilanzGegen(ohneLiga(s.gegner)),
+    key: `${s.datum}|${s.mannschaft}` };
+}
+// Form aus den eigenen Ergebnissen der laufenden Saison (wenn kein Spielplan da ist)
+function formAusSpielen(nr, n) {
+  const saison = SB().aktuelle_saison;
+  return SB().spiele.filter((x) => x.saison === saison && x.mannschaft === nr && x.ergebnis).sort((a, b) => a.datum.localeCompare(b.datum))
+    .slice(-n).map((x) => (x.ergebnis[0] > x.ergebnis[1] ? "S" : x.ergebnis[0] < x.ergebnis[1] ? "N" : "U"));
+}
+// Je Mannschaft das nächste Spiel (für Mitglieder-/Kalender-Hinweise wie bisher)
+function naechsteSpiele() {
+  const gesehen = new Set();
+  return kommendeSpiele().filter((s) => !gesehen.has(s.mannschaft) && gesehen.add(s.mannschaft));
 }
 function einordnung(eigen, gegner, anzahl) { // wie im Programm (Startseitenmodul.einordnung)
   if (!eigen || !gegner || !anzahl) return "";
@@ -697,6 +683,127 @@ function bilanzGegen(gegner) {
     .map((s) => ({ datum: s.datum, key: s.key, ergebnis: s.ergebnis, heim: s.heim, saison: s.saison, halbserie: s.halbserie }));
   return { begegnungen: x.beg, siege: x.s, unentschieden: x.u, niederlagen: x.n, seit: x.seit, bester: null, letzte };
 }
+function relTag(iso) {
+  const tg = tageBis(iso);
+  return tg === 0 ? "Heute" : tg === 1 ? "Morgen" : tg === 2 ? "Übermorgen" : `${WT[datum(iso).getDay()]} ${dmy(iso, false)}`;
+}
+// Das Spiel ausführlich: beide Mannschaften mit Platz, Punkten und Form, dazu Vergleich, letztes Duell, gemeinsame Gegner, Ort
+function spielGross(s, mitKopf = true) {
+  const seite = (name, platz, pk, form, eigen) => `<div class="sg-team ${eigen ? "" : "rechts"}"><span class="sg-name">${esc(name)}</span>
+    <span class="sg-platz">${platz ? platz + "." : "–"}<small> Platz</small></span><span class="klein gedimmt">${pk ? pk.join(":") + " Punkte" : "&nbsp;"}</span>${formKaestchen(form) || `<span class="klein gedimmt">keine Form</span>`}</div>`;
+  const b = s.bilanz || {}, l = (b.letzte || [])[0], vg = s.vergleich;
+  const info = [
+    ["Direkter Vergleich", b.begegnungen ? `${b.siege} S · ${b.unentschieden} U · ${b.niederlagen} N <span class="gedimmt">seit ${esc(b.seit)}</span>` : "noch keine Begegnung"],
+    l ? ["Letztes Duell", `<a data-go="#/spiel/${encodeURIComponent(l.key)}">${l.ergebnis[0]}:${l.ergebnis[1]}</a> · ${l.halbserie === "Rückrunde" ? "Rückrunde" : "Vorrunde"} ${esc(l.saison)}`] : null,
+    vg ? ["Gemeinsame Gegner", `${vg.gegner} – wir ${vg.punkte[0]}, sie ${vg.punkte[1]} Punkte`] : null,
+    s.analyse_gegner ? [`Gegner ${s.heim ? "auswärts" : "zu Hause"}`, esc(bilanzKurz(s.heim ? s.analyse_gegner.auswaerts : s.analyse_gegner.heim))] : null,
+    s.ort ? ["Ort", esc(s.ort.split(",").slice(0, 2).join(","))] : null,
+  ].filter(Boolean);
+  const formLink = s.gegner_name && s.analyse_liga ? `<a class="link" data-go="#/form/${encodeURIComponent(s.analyse_liga.liga)}/${encodeURIComponent(s.gegner_name)}">Formanalyse ${esc(s.gegner)} ›</a>` : "";
+  return `${mitKopf ? `<div class="sg-oben"><span class="klein fett" style="color:${esc(s.farbe)}">${esc(s.team)}${s.liga ? " · " + esc(s.liga) : ""}</span><span style="flex:1"></span>${einordnungPille(s.einordnung)}</div>
+    <span class="sg-wann">${relTag(s.datum)}${tageBis(s.datum) <= 2 ? `, ${WT[datum(s.datum).getDay()]} ${dmy(s.datum, false)}` : ""}${s.uhrzeit ? " · " + esc(s.uhrzeit) : ""} · ${s.heim ? "Heimspiel" : "auswärts"}</span>` : ""}
+    <div class="sg-teams">${seite(vereinsTeam(s.mannschaft), s.platz, s.punkte, s.form, true)}<span class="sg-gegen">gegen</span>${seite(s.gegner, s.platz_gegner, s.punkte_gegner, s.form_gegner, false)}</div>
+    <div class="sg-info">${info.map(([k, w]) => `<div class="sg-z"><span class="k">${k}</span><span class="w">${w}</span></div>`).join("")}</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap">${formLink}<a class="link" data-go="#/gegner/${encodeURIComponent(gegnerVerein(s.gegner))}">Alle Spiele gegen ${esc(gegnerVerein(s.gegner))} ›</a></div>`;
+}
+
+// ===================================================================================================== Die nächsten 7 Tage
+function tagesEintraege(iso) {
+  const d = S.daten, t = datum(iso), wt = wochentagNr(t);
+  const aus = [];
+  for (const x of d.kalender?.termine || []) {
+    if (x.datum !== iso) continue;
+    if (x.bis && x.bis !== x.datum && !x.frist && !x.spiel) continue; // Ferien u. Ä. über mehrere Tage nicht als Tagestermin
+    aus.push({ art: x.spiel ? "spiel" : x.frist ? "frist" : x.bereich === "Geburtstage" ? "geburtstag" : "termin", farbe: x.farbe, t: x });
+  }
+  // Training aus dem Wochenplan, nicht in den Ferien (Ferien stehen als Termin mit „bis“ im Bereich Halle und Training)
+  const ferien = (d.kalender?.termine || []).some((x) => x.bis && /ferien/i.test(x.titel) && x.datum <= iso && x.bis >= iso);
+  if (!ferien) for (const z of d.organisation?.wochenplan || []) if (z.tag === wt) aus.push({ art: "training", farbe: d.kalender?.bereiche?.["Halle und Training"] || "#6b7280", z });
+  const zeit = (e) => e.t?.uhrzeit || e.z?.von || (e.art === "geburtstag" ? "00" : "99");
+  return aus.sort((a, b) => zeit(a).localeCompare(zeit(b)));
+}
+function tagesZeile(e, spiele) {
+  if (e.art === "training") return `<div class="zeile kompakt">${streifen(e.farbe)}<div class="haupt"><span class="titel">Training${e.z.gruppe ? " · " + esc(e.z.gruppe) : ""}</span><span class="unter">${esc(e.z.von)}–${esc(e.z.bis)} · ${esc(e.z.ort_name)}</span></div></div>`;
+  const x = e.t;
+  if (e.art === "spiel") {
+    const s = spiele.find((y) => y.datum === x.datum && y.mannschaft === x.mannschaft);
+    return `<button class="zeile kompakt" data-go="#/spiele">${streifen(e.farbe)}<div class="haupt"><span class="titel">${s ? `${s.heim ? "gegen" : "bei"} ${esc(s.gegner)}` : esc(x.titel)}</span><span class="unter">${[x.uhrzeit, s ? s.team : "", s?.heim ? "Heimspiel" : "auswärts"].filter(Boolean).map(esc).join(" · ")}</span></div>${s && s.einordnung ? einordnungPille(s.einordnung) : ""}${CHEV}</button>`;
+  }
+  if (e.art === "geburtstag") return `<div class="zeile kompakt">${streifen(e.farbe)}<div class="haupt"><span class="titel">${esc(x.name || x.titel)}${x.alter ? ` wird ${x.alter}` : ""}</span><span class="unter">Geburtstag</span></div>${x.rund ? pille("rund", "rosa") : ""}</div>`;
+  return `<button class="zeile kompakt" data-go="#/kalender">${streifen(e.farbe)}<div class="haupt"><span class="titel">${e.art === "frist" ? "⚑ " : ""}${esc(x.titel)}</span><span class="unter">${esc([x.uhrzeit, x.ort ? x.ort.split(",")[0] : "", x.bereich].filter(Boolean).join(" · "))}</span></div>${e.art === "frist" ? pille(x.status === "erledigt" ? "erledigt" : "Frist", x.status === "erledigt" ? "gruen" : "gelb") : ""}</button>`;
+}
+function siebenTage(spiele) {
+  const a = ansicht("start", { tag: "", offen: "" });
+  const t0 = isoTag(heute());
+  const tage = Array.from({ length: 7 }, (_, i) => isoPlus(t0, i)).map((iso) => ({ iso, e: tagesEintraege(iso) }));
+  const gew = tage.find((x) => x.iso === a.tag) || tage.find((x) => x.e.some((e) => e.art !== "training")) || tage[0];
+  const leiste = tage.map(({ iso, e }) => {
+    const d = datum(iso), farben = [...new Set(e.map((x) => x.farbe))].slice(0, 3);
+    return `<button class="tag ${iso === gew.iso ? "gewaehlt" : ""} ${iso === t0 ? "heute" : ""}" data-akt="setze" data-feld="start.tag" data-wert="${iso}" aria-label="${WT_LANG[d.getDay()]} ${dmy(iso)}">
+      <span class="wt">${WT[d.getDay()]}</span><span class="nr">${d.getDate()}</span><span class="striche">${farben.map((f) => `<i style="background:${esc(f)}"></i>`).join("") || `<em>frei</em>`}</span></button>`;
+  }).join("");
+  const d = datum(gew.iso);
+  return `<div class="karte dicht"><div class="tagleiste">${leiste}</div>
+    <div class="tag-liste"><span class="tag-titel">${esc(WT_LANG[d.getDay()])}, ${d.getDate()}. ${esc(MONATE[d.getMonth()])}</span>
+    ${gew.e.map((e) => tagesZeile(e, spiele)).join("") || `<div class="zeile kompakt"><span class="leer">Nichts geplant.</span></div>`}</div></div>`;
+}
+
+// ===================================================================================================== Start
+SEITEN.start = () => {
+  const d = S.daten, st = d.start || {}, m = d.meta;
+  const k = st.mitglieder || {};
+  const a = ansicht("start", { tag: "", offen: "" });
+  const fristen = offeneFristen();
+  const tHeute = isoTag(heute());
+  const versTermin = (d.kalender?.termine || []).filter((x) => x.bereich === "Versammlungen" && x.datum >= tHeute)[0]
+    || (d.organisation?.versammlungen || []).filter((v) => v.datum >= tHeute).sort((x, y) => x.datum.localeCompare(y.datum))[0];
+  const kacheln = `<div class="kachelreihe drei">
+    ${kachel2({ titel: "Mitglieder", wert: k.gesamt ?? "–", unter: `${k.aktiv ?? "–"} aktiv ›`, ziel: "#/mitglieder" })}
+    ${kachel2({ titel: "Fristen", wert: fristen.length, unter: fristen[0] ? `ab ${dmy(fristen[0].datum, false)} ›` : "keine offen ›", farbe: "#c08a00", wertArt: fristen.length ? "gelb" : "", ziel: "#/kalender/fristen" })}
+    ${kachel2({ titel: "Sitzung", wert: versTermin ? dmy(versTermin.datum, false) : "–", unter: versTermin ? `${versTermin.titel} ›` : "keine geplant ›", farbe: "#1e8a4a", ziel: "#/organisation/versammlungen" })}</div>`;
+
+  const spiele = kommendeSpiele();
+  const [erstes, ...folgende] = spiele;
+  const gross = erstes ? `<div class="karte spielgross">${spielGross(erstes)}</div>` : `<div class="karte"><span class="leer">Keine Spiele angesetzt – Sommerpause.</span></div>`;
+  const danach = folgende.slice(0, 4).map((s) => {
+    const offen = a.offen === s.key;
+    return `<div class="eintrag"><button class="zeile" data-akt="umschaltenWert" data-feld="start.offen|${esc(s.key)}">${datumsblock(s.datum)}${streifen(s.farbe)}
+      <div class="haupt"><span class="titel">${s.heim ? "gegen" : "bei"} ${esc(s.gegner)}</span><span class="unter">${esc([s.team, s.uhrzeit, s.platz ? `wir ${s.platz}.` : "", s.platz_gegner ? `Gegner ${s.platz_gegner}.` : ""].filter(Boolean).join(" · "))}</span>${s.einordnung ? `<span class="pillzeile">${einordnungPille(s.einordnung)}</span>` : ""}</div><span style="color:var(--chev);display:flex">${ic(offen ? "chevunten" : "chev", 18)}</span></button>
+      ${offen ? `<div class="aufklapp-inhalt spielgross" style="padding:10px 14px 12px">${spielGross(s, false)}</div>` : ""}</div>`;
+  }).join("");
+
+  // Mannschaften kompakt: Liga, Platz, Punkte, letzte 3 Spiele
+  const saison = SB().aktuelle_saison;
+  const teams = SB().mannschaften.map((x) => ({ ...x, tp: tabellenPlatz(saison, x.nr) })).filter((x) => x.tp);
+  const mannschaften = teams.map((x, i) => `<button class="zeile" data-go="#/spiele/mannschaften/${x.nr}">${streifen(teamFarbe(x.nr))}
+    <div class="haupt"><span class="titel fett">${esc(vereinsTeam(x.nr))}</span><span class="unter">${esc(x.tp.liga)} · ${esc(x.team)}</span></div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px"><span style="font-weight:700">${x.tp.platz}.<span class="gedimmt" style="font-weight:500;font-size:13px"> · ${x.tp.punkte ? x.tp.punkte.join(":") : ""}</span></span>${formKaestchen(formAusSpielen(x.nr, 3), true)}</div>${CHEV}</button>`).join("");
+
+  const ergebnisse = (st.letzte_ergebnisse || []).slice(0, 3).map((e) => `<button class="zeile" data-go="#/spiel/${encodeURIComponent(e.key)}">${streifen(teamFarbe(e.mannschaft))}
+    <div class="haupt"><span class="titel">${esc(teamName(e.mannschaft) || e.team)} ${e.heim ? "gegen" : "bei"} ${esc(e.gegner)}</span><span class="unter">${esc(wtDatum(e.datum))}${SB().spiele.find((s) => s.key === e.key)?.nur_ergebnis ? " · ohne Spielbericht" : ""}</span></div>
+    ${pille(`${e.ergebnis[0]}:${e.ergebnis[1]}`, ergebnisArt(e.ergebnis))}${CHEV}</button>`).join("");
+
+  const geb = (d.kalender?.termine || []).filter((x) => x.bereich === "Geburtstage" && tageBis(x.datum) >= 0 && tageBis(x.datum) <= 7);
+  const neu = (d.vereinsleben || [])[0];
+  const imVerein = geb.map((x) => `<div class="zeile kompakt">${pille(tageBis(x.datum) === 0 ? "heute" : tageBis(x.datum) === 1 ? "morgen" : wtDatum(x.datum), "rosa")}<span style="font-size:14px;flex:1">${esc(x.name || x.titel)}${x.alter ? ` wird ${x.alter}` : ""}</span></div>`).join("")
+    + (neu ? `<button class="zeile" data-go="#/eintrag/${encodeURIComponent(neu.id)}"><div class="vorschau" ${neu.titelbild ? `data-bild="${esc(neu.titelbild)}" data-groesse="200"` : ""}></div>
+      <div class="haupt"><span class="unter">Neu im Vereinsleben</span><span class="titel">${esc(neu.titel)}</span><span class="unter">${esc(wtDatum(neu.datum))}${neu.bilder?.length ? ` · ${neu.bilder.length} Bilder` : ""}</span></div>${CHEV}</button>` : "");
+
+  const kopfGanz = `<header class="kopf start-kopf">
+    <div class="kopf-zeile" style="gap:14px"><img class="wappen nur-handy" src="wappen.png" alt="Wappen TTV Werragrund 08">
+      <div style="display:flex;flex-direction:column;flex:1;min-width:0"><span class="vereinsname">${esc(m.verein_kurz)}</span><span class="gedimmt" style="font-size:14px">${esc(gruss())} · ${esc(WT[heute().getDay()])} ${heute().getDate()}. ${esc(MONATE[heute().getMonth()])}</span></div></div>
+    ${kopfStand(true)}</header>`;
+  const links = `${abschnitt("Die nächsten 7 Tage", "Kalender", "#/kalender")}${siebenTage(spiele)}
+    ${abschnitt("Nächstes Spiel")}${gross}
+    ${danach ? `${abschnitt("Danach", "Alle Spiele", "#/spiele")}<div class="karte dicht">${danach}</div>` : ""}`;
+  const rechts = `${mannschaften ? `${abschnitt("Mannschaften")}<div class="karte dicht">${mannschaften}</div>` : ""}
+    ${abschnitt("Letzte Ergebnisse", "Alle", "#/spiele")}<div class="karte dicht">${ergebnisse || `<div class="zeile"><span class="leer">Noch keine Ergebnisse.</span></div>`}</div>
+    ${imVerein ? `${abschnitt("Im Verein")}<div class="karte dicht">${imVerein}</div>` : ""}`;
+  return {
+    titel: "Start", kopfGanz,
+    inhalt: `${kacheln}<div class="start-raster"><div class="spalte">${links}</div><div class="spalte">${rechts}</div></div>`,
+  };
+};
 // ===================================================================================================== Formanalyse
 // Aus dem Spielplan von mytischtennis.de (vom PC berechnet: spielbetrieb.ligen_analyse, start.naechste_spiele[].analyse)
 const FORM_ART = { S: "gruen", U: "gelb", N: "rot" };
@@ -705,16 +812,6 @@ function formPunkte(liste) {
     : `<span class="klein gedimmt">noch keine Spiele</span>`;
 }
 function bilanzKurz(b) { return b && b.begegnungen ? `${b.s}-${b.u}-${b.n} · ${b.punkte[0]}:${b.punkte[1]} Punkte` : "noch keine Spiele"; }
-function formBlock(s) {
-  const a = s.analyse, vg = a.vergleich, b = s.heim ? a.auswaerts : a.heim;
-  return `<div class="formblock">
-    <div class="fz"><span class="k">Form Gegner</span>${formPunkte(a.form)}</div>
-    <div class="fz"><span class="k">Unsere Form</span>${formPunkte(a.wir_form)}</div>
-    ${a.serie || a.wir_serie ? `<span class="klein gedimmt">${[a.serie ? `Gegner: ${esc(a.serie)}` : "", a.wir_serie ? `Wir: ${esc(a.wir_serie)}` : ""].filter(Boolean).join(" · ")}</span>` : ""}
-    <span class="klein gedimmt">Gegner ${s.heim ? "auswärts" : "zu Hause"}: ${esc(bilanzKurz(b))}</span>
-    ${vg ? `<span class="klein gedimmt">Gemeinsame Gegner (${vg.gegner}): wir ${vg.punkte[0]}, Gegner ${vg.punkte[1]} Punkte</span>` : ""}
-    <a class="link" data-go="#/form/${encodeURIComponent(a.liga)}/${encodeURIComponent(a.name)}">Formanalyse ›</a></div>`;
-}
 function ligaAnalyse(liga, saison) {
   const alle = SB().ligen_analyse || [];
   return alle.find((x) => norm(x.liga) === norm(liga) && (!saison || x.saison === saison)) || null;
@@ -754,34 +851,66 @@ function gegnerVerein(name) { return String(name || "").replace(/\s+(I|II|III|IV
 const mitgliedId = (m) => encodeURIComponent(`${m.nachname}|${m.vorname}`);
 function findeMitglied(id) { return (S.daten.mitglieder || []).find((m) => `${m.nachname}|${m.vorname}` === id); }
 function mitgliederGefiltert() {
-  const a = ansicht("mitglieder", { filter: "alle", suche: "" });
-  const q = norm(a.suche);
+  const a = ansicht("mitglieder", { filter: "", team: "", suche: "" });
+  const q = norm(a.suche), monat = heute().getMonth() + 1;
   return (S.daten.mitglieder || []).filter((m) =>
-    (a.filter === "alle" || (a.filter === "aktiv" && m.aktiv) || (a.filter === "passiv" && !m.aktiv) || (a.filter === "jugend" && m.alter != null && m.alter < 18)
-      || (a.filter === "spieler" && m.mannschaft))
-    && (!q || norm(`${m.vorname} ${m.nachname} ${m.nachname} ${m.ort} ${m.mannschaft?.name || ""}`).includes(q)));
+    (!a.filter || (a.filter === "aktiv" && m.aktiv) || (a.filter === "passiv" && !m.aktiv) || (a.filter === "offen" && beitragOffen(m))
+      || (a.filter === "geburtstag" && m.geb && Number(m.geb.slice(5, 7)) === monat))
+    && (!a.team || (a.team === "jugend" ? m.alter != null && m.alter < 18 : String(m.mannschaft?.mannschaft || "") === a.team))
+    && (!q || norm(`${m.vorname} ${m.nachname} ${m.nachname} ${m.ort} ${m.telefon || ""} ${m.email || ""}`).includes(q)));
+}
+function beitragOffen(m) { return istVorstand() && m.beitrag && ["offen", "teilweise"].includes(m.beitrag.status); }
+function geburtstagBald(m) {
+  if (!m.geb) return null;
+  const t = heute(); let g = new Date(t.getFullYear(), Number(m.geb.slice(5, 7)) - 1, Number(m.geb.slice(8, 10)));
+  if (g < t) g = new Date(t.getFullYear() + 1, g.getMonth(), g.getDate());
+  const tage = Math.round((g - t) / 86400000);
+  return tage <= 14 ? { tage, alter: g.getFullYear() - Number(m.geb.slice(0, 4)), iso: isoTag(g) } : null;
 }
 function mitgliedUnter(m) {
-  if (m.mannschaft) return `${teamName(m.mannschaft.mannschaft)} · Platz ${m.mannschaft.platz}`;
-  return m.alter != null ? `${m.alter} Jahre${m.ort ? " · " + m.ort : ""}` : m.ort || "";
+  const teil = [];
+  if (m.mannschaft) teil.push(teamName(m.mannschaft.mannschaft) + (m.mannschaft.platz ? ` · ${m.mannschaft.mannschaft}.${m.mannschaft.platz}` : ""));
+  else teil.push(m.aktiv ? "aktiv" : "passiv");
+  if (m.qttr?.wert) teil.push(`Q-TTR ${m.qttr.wert}`); else if (m.ort) teil.push(m.ort);
+  return teil.join(" · ");
 }
 TEILE.mitgliederliste = () => {
   const liste = mitgliederGefiltert();
   const gewaehlt = route().seite === "mitglied" ? route().param[0] : null;
-  return liste.map((m) => `<button class="zeile ${gewaehlt === `${m.nachname}|${m.vorname}` ? "ausgewaehlt" : ""}" data-go="#/mitglied/${mitgliedId(m)}">${avatar(m.vorname, m.nachname)}
-    <div class="haupt"><span class="titel">${esc(m.nachname)}, ${esc(m.vorname)}</span><span class="unter">${esc(mitgliedUnter(m))}</span></div>
-    ${pille(m.aktiv ? "aktiv" : "passiv", m.aktiv ? "gruen" : "")}</button>`).join("") || `<div class="zeile"><span class="leer">Niemand gefunden.</span></div>`;
+  return liste.map((m) => {
+    const gb = geburtstagBald(m);
+    const rechts = beitragOffen(m) ? pille(`offen ${eur((m.beitrag.soll || 0) - (m.beitrag.bezahlt || 0)).replace(",00", "")}`, "rot")
+      : gb ? pille(gb.tage === 0 ? "heute Geburtstag" : gb.tage === 1 ? "morgen Geburtstag" : `wird ${gb.alter} · ${dmy(gb.iso, false)}`, "rosa") : "";
+    return `<button class="zeile ${gewaehlt === `${m.nachname}|${m.vorname}` ? "ausgewaehlt" : ""}" data-go="#/mitglied/${mitgliedId(m)}">${avatar(m.vorname, m.nachname)}
+    <div class="haupt"><span class="titel"><b>${esc(m.nachname)}</b>, ${esc(m.vorname)}</span><span class="unter">${m.mannschaft ? `<i class="punkt-farbe" style="background:${esc(teamFarbe(m.mannschaft.mannschaft))}"></i>` : ""}${esc(mitgliedUnter(m))}</span></div>${rechts}</button>`;
+  }).join("") || `<div class="zeile"><span class="leer">Niemand gefunden.</span></div>`;
 };
 function mitgliederKopf() {
-  const a = ansicht("mitglieder", { filter: "alle", suche: "" });
-  return `${suchfeld("mitglieder", "suche", "Name, Ort oder Mannschaft", "mitgliederliste")}
-    ${chips("mitglieder", "filter", [["alle", "Alle"], ["aktiv", "Aktiv"], ["passiv", "Passiv"], ["spieler", "In Mannschaften"], ["jugend", "Jugend"]], a.filter)}`;
+  const a = ansicht("mitglieder", { filter: "", team: "", suche: "" });
+  const alle = S.daten.mitglieder || [];
+  const teams = [...new Set(alle.map((m) => m.mannschaft?.mannschaft).filter(Boolean))].sort();
+  const zahl = (f) => alle.filter(f).length;
+  return `${suchfeld("mitglieder", "suche", "Name, Ort oder Telefon", "mitgliederliste")}
+    ${chips("mitglieder", "team", [["", `Alle ${alle.length}`], ...teams.map((n) => [String(n), `${teamName(n)} ${zahl((m) => m.mannschaft?.mannschaft === n)}`]), ...(zahl((m) => m.alter != null && m.alter < 18) ? [["jugend", `Jugend ${zahl((m) => m.alter != null && m.alter < 18)}`]] : [])], a.team)}`;
+}
+function mitgliederKacheln() {
+  const a = ansicht("mitglieder", { filter: "", team: "", suche: "" });
+  const alle = S.daten.mitglieder || [], k = S.daten.start?.mitglieder || {};
+  const monat = heute().getMonth() + 1;
+  const offen = alle.filter(beitragOffen);
+  const summe = offen.reduce((s, m) => s + (m.beitrag.soll || 0) - (m.beitrag.bezahlt || 0), 0);
+  const geb = alle.filter((m) => m.geb && Number(m.geb.slice(5, 7)) === monat);
+  return `<div class="kachelreihe vier">
+    ${filterKachel("mitglieder", "filter", "aktiv", a.filter, { titel: "Aktiv", wert: k.aktiv ?? alle.filter((m) => m.aktiv).length, unter: k.jugend ? `davon ${k.jugend} Jugend` : "spielen mit" })}
+    ${filterKachel("mitglieder", "filter", "passiv", a.filter, { titel: "Passiv", wert: k.passiv ?? alle.filter((m) => !m.aktiv).length, unter: k.vorjahr ? `Vorjahr ${k.vorjahr} gesamt` : "", farbe: "#6b7280" })}
+    ${istVorstand() ? filterKachel("mitglieder", "filter", "offen", a.filter, { titel: "Beitrag offen", wert: offen.length, unter: offen.length ? `${eur(summe)} offen` : "alle bezahlt", farbe: "#c2571a", wertArt: offen.length ? "rot" : "" }) : ""}
+    ${filterKachel("mitglieder", "filter", "geburtstag", a.filter, { titel: "Geburtstage", wert: geb.length, unter: `im ${MONATE[monat - 1]}`, farbe: "#c0397a" })}</div>`;
 }
 SEITEN.mitglieder = () => {
   const k = S.daten.start?.mitglieder || {};
   return {
-    titel: "Mitglieder", rechts: `${k.gesamt ?? ""} · ${k.aktiv ?? ""} aktiv`, kopf: mitgliederKopf(),
-    inhalt: `<div class="zweispaltig"><div class="karte dicht liste-spalte" data-teil-ziel="mitgliederliste">${TEILE.mitgliederliste()}</div>
+    titel: "Mitglieder", rechts: `${k.gesamt ?? ""} · Ø ${k.durchschnittsalter != null ? String(Math.round(k.durchschnittsalter)) : "–"} Jahre`, kopf: mitgliederKopf(),
+    inhalt: `${mitgliederKacheln()}<div class="zweispaltig"><div class="karte dicht liste-spalte" data-teil-ziel="mitgliederliste">${TEILE.mitgliederliste()}</div>
       <div class="karte nur-gross" style="align-items:center;justify-content:center;min-height:240px;color:var(--muted)">Mitglied auswählen</div></div>`,
   };
 };
@@ -823,40 +952,121 @@ SEITEN.mitglied = ([id]) => {
   }
   return { titel: `${m.vorname} ${m.nachname}`, zurueck: ["#/mitglieder", "Mitglieder"], nurZurueck: true, inhalt: mitgliedDetail(m) };
 };
-function lebenZeile(e) {
-  return `<button class="zeile" data-go="#/eintrag/${encodeURIComponent(e.id)}"><div class="vorschau" ${e.titelbild ? `data-bild="${esc(e.titelbild)}" data-groesse="200"` : ""}></div>
-    <div class="haupt"><span class="titel">${esc(e.titel)}</span><span class="unter">${esc(wtDatum(e.datum))} · ${esc(e.art)}${e.bilder?.length ? ` · ${e.bilder.length} Bilder` : ""}</span></div>${CHEV}</button>`;
-}
-
-// ===================================================================================================== Kalender
-SEITEN.kalender = ([vorfilter]) => {
-  const a = ansicht("kalender", { filter: "alle", vergangene: "", geb: "" });
-  if (vorfilter && a._vor !== vorfilter) { a.filter = vorfilter; a._vor = vorfilter; }
-  const alle = S.daten.kalender?.termine || [];
-  const t = heute();
-  const passt = (x) => (x.bereich !== "Geburtstage" || a.geb || a.filter === "Geburtstage")
-    && (a.filter === "alle" ? true : a.filter === "spiele" ? x.spiel : a.filter === "fristen" ? x.frist : x.bereich === a.filter);
-  const liste = alle.filter((x) => passt(x) && (a.vergangene ? datum(x.datum) < t : (datum(x.datum) >= t || (x.bis && datum(x.bis) >= t) || (x.frist && x.status === "überfällig"))));
-  if (a.vergangene) liste.reverse();
-  const bereiche = [...new Set(alle.map((x) => x.bereich))].filter((b) => b !== "Spielbetrieb" && b !== "Geburtstage");
-  let html = "", monat = "";
-  for (const x of liste) {
-    const d = datum(x.datum), mk = `${MONATE[d.getMonth()]} ${d.getFullYear()}`;
-    if (mk !== monat) { if (monat) html += "</div>"; html += `<div class="monat">${mk}</div><div class="karte" style="padding-top:2px;padding-bottom:2px;gap:0">`; monat = mk; }
-    html += terminZeile(x);
+// ===================================================================================================== Kalender (Monat | Liste wie am PC)
+// Legende = Filter: Mannschaften in ihren Farben, sonst die Bereiche. Ausgeblendetes steht in ansicht.aus (durch | getrennt).
+function kalSchluessel(x) { return x.spiel && x.mannschaft ? `M${x.mannschaft}` : x.bereich; }
+function kalLegende(alle, a) {
+  const eintraege = new Map();
+  for (const x of alle) {
+    const k = kalSchluessel(x);
+    if (!eintraege.has(k)) eintraege.set(k, { k, name: x.spiel && x.mannschaft ? teamName(x.mannschaft) : x.bereich, farbe: x.farbe || S.daten.kalender?.bereiche?.[x.bereich] || "#6b7280" });
   }
-  if (monat) html += "</div>";
-  return {
-    titel: "Kalender",
-    kopf: `<div class="chips">${[["alle", "Alle"], ["spiele", "Spiele"], ["fristen", "Fristen"], ...bereiche.map((b) => [b, b])].map(([w, t]) =>
-      `<button class="chip ${w === a.filter ? "aktiv" : ""}" data-akt="setze" data-feld="kalender.filter" data-wert="${esc(w)}">${esc(t)}</button>`).join("")}
-      <button class="chip ${a.geb ? "aktiv" : ""}" data-akt="umschalten" data-feld="kalender.geb" data-wert="1">${a.geb ? "Geburtstage ausblenden" : "Geburtstage einblenden"}</button></div>`,
-    inhalt: `${html || `<div class="karte"><span class="leer">${a.vergangene ? "Keine vergangenen Termine (60 Tage)." : "Keine anstehenden Termine."}</span></div>`}
-      <button class="knopf" data-akt="umschalten" data-feld="kalender.vergangene" data-wert="1">${a.vergangene ? "Kommende Termine zeigen" : "Vergangene Termine zeigen"}</button>
-      <span class="hinweis">Termine, Fristen, Spiele aus den Kalender-Abos und Geburtstage – wie im Vereinskalender am PC.</span>`,
-  };
+  if ((S.daten.organisation?.wochenplan || []).length && !eintraege.has("Halle und Training")) eintraege.set("Halle und Training", { k: "Halle und Training", name: "Halle und Training", farbe: S.daten.kalender?.bereiche?.["Halle und Training"] || "#6b7280" });
+  const reihenfolge = (e) => (e.k.startsWith("M") ? "0" + e.k : e.k === "Geburtstage" ? "9" : "5" + e.name);
+  const aus = new Set((a.aus || "").split("|").filter(Boolean));
+  return `<div class="chips legende">${[...eintraege.values()].sort((x, y) => reihenfolge(x).localeCompare(reihenfolge(y))).map((e) =>
+    `<button class="chip ${aus.has(e.k) ? "aus" : ""}" data-akt="kalLegende" data-wert="${esc(e.k)}"><i style="background:${esc(e.farbe)}"></i>${esc(e.name.replace("Halle und Training", "Training"))}</button>`).join("")}</div>`;
+}
+AKTIONEN.kalLegende = (el) => {
+  const a = ansicht("kalender"); const aus = new Set((a.aus || "").split("|").filter(Boolean));
+  aus.has(el.dataset.wert) ? aus.delete(el.dataset.wert) : aus.add(el.dataset.wert);
+  a.aus = [...aus].join("|"); zeige();
 };
-
+AKTIONEN.kalMonat = (el) => {
+  const a = ansicht("kalender"); const [j, m] = a.monat.split("-").map(Number);
+  const d = new Date(j, m - 1 + Number(el.dataset.wert), 1);
+  a.monat = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; a.tag = isoTag(d); zeige();
+};
+AKTIONEN.kalHeute = () => { const a = ansicht("kalender"); const t = heute(); a.monat = isoTag(t).slice(0, 7); a.tag = isoTag(t); a.ansicht = "monat"; zeige(); };
+function kwVon(d) { const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); const n = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - n); const j = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)); return Math.ceil(((t - j) / 86400000 + 1) / 7); }
+function kalTermineAm(iso, sichtbar) {
+  return tagesEintraege(iso).filter((e) => e.art === "training" ? sichtbar("Halle und Training") : sichtbar(kalSchluessel(e.t)));
+}
+function kalEintragZeile(e) {
+  if (e.art === "training") return `<div class="zeile kompakt"><span class="uhr">${esc(e.z.von)}</span>${streifen(e.farbe)}<div class="haupt"><span class="titel">Training${e.z.gruppe ? " · " + esc(e.z.gruppe) : ""}</span><span class="unter">bis ${esc(e.z.bis)} · ${esc(e.z.ort_name)}</span></div></div>`;
+  const x = e.t, tg = tageBis(x.datum);
+  const p = x.frist ? (x.status === "erledigt" ? pille("erledigt", "gruen") : tg < 0 ? pille("überfällig", "rot") : pille(tg === 0 ? "heute" : `in ${tg} Tagen`, "gelb")) : "";
+  const s = x.spiel ? kommendeSpiele().find((y) => y.datum === x.datum && y.mannschaft === x.mannschaft) : null;
+  const unter = [x.ort ? x.ort.split(",")[0] : "", x.spiel ? "" : x.bereich, x.text && !x.spiel && !x.abo ? x.text : ""].filter(Boolean).join(" · ");
+  return `<div class="zeile kompakt"><span class="uhr">${esc(x.uhrzeit || (x.frist ? "Frist" : ""))}</span>${streifen(x.farbe)}<div class="haupt"><span class="titel">${x.frist ? "⚑ " : ""}${esc(x.titel)}</span>${unter ? `<span class="unter">${esc(unter)}</span>` : ""}</div>${p || (s ? einordnungPille(s.einordnung) : "")}</div>`;
+}
+SEITEN.kalender = ([vorfilter]) => {
+  const t = heute();
+  const a = ansicht("kalender", { ansicht: "monat", monat: isoTag(t).slice(0, 7), tag: isoTag(t), aus: "Geburtstage", art: "alles", suche: "", vergangene: "" });
+  if (vorfilter && a._vor !== vorfilter) { a._vor = vorfilter; if (vorfilter === "fristen") { a.ansicht = "liste"; a.art = "offen"; } }
+  const alle = S.daten.kalender?.termine || [];
+  const aus = new Set((a.aus || "").split("|").filter(Boolean));
+  const sichtbar = (k) => !aus.has(k);
+  const kopf = `${segmente("kalender", "ansicht", [["monat", "Monat"], ["liste", "Liste"]], a.ansicht)}${kalLegende(alle, a)}`;
+  const rechts = `<button class="knopf klein" data-akt="kalHeute">Heute</button>`;
+  return { titel: "Kalender", rechts, kopf, inhalt: a.ansicht === "liste" ? kalListe(a) : kalMonat(a, sichtbar) };
+};
+function kalMonat(a, sichtbar) {
+  const [j, m] = a.monat.split("-").map(Number);
+  const erster = new Date(j, m - 1, 1);
+  const start = new Date(j, m - 1, 1 - wochentagNr(erster));
+  const tHeute = isoTag(heute());
+  if (!a.tag || a.tag.slice(0, 7) !== a.monat) a.tag = tHeute.slice(0, 7) === a.monat ? tHeute : isoTag(erster);
+  let wochen = "";
+  for (let w = 0; w < 6; w++) {
+    const wStart = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7 * w);
+    if (w > 0 && wStart.getMonth() !== m - 1) break;
+    let zellen = `<span class="kw">${kwVon(wStart)}</span>`;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(wStart.getFullYear(), wStart.getMonth(), wStart.getDate() + i), iso = isoTag(d);
+      const im = d.getMonth() === m - 1;
+      const e = im ? kalTermineAm(iso, sichtbar) : [];
+      const farben = [...new Set(e.filter((x) => x.art !== "frist").map((x) => x.farbe))].slice(0, 3);
+      const frist = e.some((x) => x.art === "frist" && x.t.status !== "erledigt");
+      zellen += `<button class="mz ${im ? "" : "fremd"} ${i >= 5 ? "we" : ""} ${iso === tHeute ? "heute" : ""} ${iso === a.tag ? "gewaehlt" : ""}" ${im ? `data-akt="setze" data-feld="kalender.tag" data-wert="${iso}"` : "disabled"} aria-label="${dmy(iso)}">
+        <span class="nr">${d.getDate()}</span><span class="striche">${farben.map((f) => `<i style="background:${esc(f)}"></i>`).join("")}</span>${frist ? `<span class="fl"></span>` : ""}</button>`;
+    }
+    wochen += `<div class="mw">${zellen}</div>`;
+  }
+  const blatt = `<div class="karte dicht monatsblatt">
+    <div class="mb-kopf"><button class="pfeil" data-akt="kalMonat" data-wert="-1" aria-label="Voriger Monat">${ic("zurueck", 20)}</button><b>${MONATE[m - 1]} ${j}</b><button class="pfeil" data-akt="kalMonat" data-wert="1" aria-label="Nächster Monat">${ic("chev", 20)}</button></div>
+    <div class="mw kopfzeile"><span class="kw">KW</span>${["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"].map((x) => `<span>${x}</span>`).join("")}</div>${wochen}</div>`;
+  const dT = datum(a.tag);
+  const tagE = kalTermineAm(a.tag, sichtbar);
+  const tagKarte = `<div class="karte dicht"><span class="tag-titel">${esc(WT_LANG[dT.getDay()])}, ${dT.getDate()}. ${esc(MONATE[dT.getMonth()])}</span>${tagE.map(kalEintragZeile).join("") || `<div class="zeile kompakt"><span class="leer">Nichts eingetragen.</span></div>`}</div>`;
+  const fr = offeneFristen(30);
+  const fristKarte = `<div class="karte dicht"><div class="karte-titel" style="padding:12px 14px 8px"><h2>⚑ Fristen – nächste 30 Tage</h2><a data-akt="kalFristen">Alle ›</a></div>
+    ${fr.slice(0, 5).map((x) => { const tg = tageBis(x.datum); return `<div class="zeile kompakt"><span class="kasten" aria-hidden="true"></span><div class="haupt"><span class="titel">${esc(x.titel)}</span><span class="unter">${esc(wtDatum(x.datum))} · ${esc(x.bereich)}</span></div>${pille(tg < 0 ? "überfällig" : tg === 0 ? "heute" : `in ${tg} Tagen`, tg < 0 ? "rot" : tg <= 14 ? "gelb" : "")}</div>`; }).join("") || `<div class="zeile kompakt"><span class="leer">Keine offenen Fristen.</span></div>`}</div>`;
+  return `<div class="kal-raster"><div class="spalte">${blatt}</div><div class="spalte">${tagKarte}${fristKarte}</div></div>
+    <span class="hinweis">Abhaken geht am PC – die App zeigt den Stand vom ${esc(relZeit(S.daten.meta.erzeugt))}.</span>`;
+}
+AKTIONEN.kalFristen = () => { const a = ansicht("kalender"); a.ansicht = "liste"; a.art = "offen"; zeige(); };
+function kalListe(a) {
+  return `${suchfeld("kalender", "suche", "Termine durchsuchen", "kalliste")}
+    ${segmente("kalender", "art", [["alles", "Alles"], ["fristen", "Fristen"], ["offen", "Offen"]], a.art)}
+    <div style="display:flex;flex-direction:column;gap:12px" data-teil-ziel="kalliste">${TEILE.kalliste()}</div>
+    <button class="knopf" data-akt="umschalten" data-feld="kalender.vergangene" data-wert="1">${a.vergangene ? "Kommende Termine zeigen" : "Vergangene Termine zeigen"}</button>
+    <span class="hinweis">Termine, Fristen, Spiele aus den Kalender-Abos, Training aus dem Wochenplan und Geburtstage – wie im Vereinskalender am PC. Legende antippen blendet aus.</span>`;
+}
+TEILE.kalliste = () => {
+  const a = ansicht("kalender"), alle = S.daten.kalender?.termine || [];
+  const aus = new Set((a.aus || "").split("|").filter(Boolean)), sichtbar = (k) => !aus.has(k);
+  const t = heute(), tIso = isoTag(t), q = norm(a.suche);
+  const passtArt = (x) => a.art === "fristen" ? x.frist : a.art === "offen" ? x.frist && x.status !== "erledigt" : true;
+  const ueberfaellig = (x) => x.frist && x.status !== "erledigt" && x.datum < tIso;
+  let liste = alle.filter((x) => sichtbar(kalSchluessel(x)) && passtArt(x) && (!q || norm(`${x.titel} ${x.text} ${x.ort} ${x.bereich}`).includes(q)));
+  liste = a.vergangene ? liste.filter((x) => x.datum < tIso && !ueberfaellig(x)).reverse() : liste.filter((x) => x.datum >= tIso || (x.bis && x.bis >= tIso) || ueberfaellig(x));
+  // Gruppen: Überfällig, Diese Woche, Nächste Woche, danach je Monat
+  const sonntag = isoPlus(tIso, 6 - wochentagNr(t)), sonntag2 = isoPlus(sonntag, 7);
+  const gruppe = (x) => a.vergangene ? `${MONATE[datum(x.datum).getMonth()]} ${datum(x.datum).getFullYear()}`
+    : ueberfaellig(x) ? "Überfällig" : x.datum <= sonntag ? "Diese Woche" : x.datum <= sonntag2 ? "Nächste Woche" : `${MONATE[datum(x.datum).getMonth()]} ${datum(x.datum).getFullYear()}`;
+  const gruppen = [];
+  for (const x of liste) { const g = gruppe(x); let gr = gruppen.find((y) => y.g === g); if (!gr) gruppen.push((gr = { g, l: [] })); gr.l.push(x); }
+  const zeile = (x, ersterDesTages) => {
+    const tg = tageBis(x.datum);
+    const p = x.frist ? (x.status === "erledigt" ? pille("erledigt", "gruen") : tg < 0 ? pille(`${-tg} Tag${tg === -1 ? "" : "e"} drüber`, "rot") : tg <= 30 ? pille(tg === 0 ? "heute" : tg === 1 ? "morgen" : `in ${tg} Tagen`, tg <= 14 ? "gelb" : "") : "")
+      : tg === 0 ? pille("heute", "blau") : tg === 1 ? pille("morgen", "blau") : "";
+    const unter = [x.uhrzeit, x.ort ? x.ort.split(",")[0] : "", x.spiel ? teamName(x.mannschaft) : x.bereich].filter(Boolean).join(" · ");
+    return `<div class="zeile">${ersterDesTages ? datumsblock(x.datum) : `<div class="datumsblock"></div>`}${streifen(x.farbe)}<div class="haupt"><span class="titel">${x.frist ? "⚑ " : ""}${esc(x.titel)}</span><span class="unter">${esc(unter)}${x.bis && x.bis !== x.datum ? ` · bis ${dmy(x.bis, false)}` : ""}</span></div>${p}</div>`;
+  };
+  const html = gruppen.map(({ g, l }) => `<div class="monat ${g === "Überfällig" ? "rot" : ""}">${esc(g)}</div><div class="karte dicht">${l.map((x, i) => zeile(x, i === 0 || l[i - 1].datum !== x.datum)).join("")}</div>`).join("");
+  return html || `<div class="karte"><span class="leer">${a.vergangene ? "Keine vergangenen Termine." : "Nichts gefunden."}</span></div>`;
+};
 // ===================================================================================================== Spielbetrieb: Rechnen
 const SB = () => S.daten.spielbetrieb || { spiele: [], spieler: {}, mannschaften: [], saisons: [] };
 function spieleFilter({ saison = "*", hs = "", team = "" } = {}) {
@@ -929,10 +1139,6 @@ function tabellenPlatz(saison, nr) {
 }
 
 // ===================================================================================================== Spielbetrieb: Seiten
-function spieleAnsicht() {
-  const sb = SB();
-  return ansicht("spiele", { tab: "ergebnisse", saison: sb.aktuelle_saison || sb.saisons[0] || "*", hs: "", team: "" });
-}
 function saisonKnopf(a, mitAlle, mitHalbserie = true) {
   if (!mitAlle && a.saison === "*") a.saison = SB().aktuelle_saison || SB().saisons[0];
   const hs = mitHalbserie ? a.hs : "";
@@ -945,60 +1151,116 @@ function saisonKnopf(a, mitAlle, mitHalbserie = true) {
   const wert = `${a.saison}|${hs}`;
   return `<label class="saisonknopf"><select data-feld="spiele.saisonhs" aria-label="Saison und Halbserie">${opt.map(([w, t]) => `<option value="${esc(w)}" ${w === wert ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>${ic("chevunten", 14)}</label>`;
 }
-function saisonAuswahl(a, mitAlle) {
-  const opt = (mitAlle ? [["*", "Alle Saisons"]] : []).concat(SB().saisons.map((s) => [s, s]));
-  if (!mitAlle && a.saison === "*") a.saison = SB().aktuelle_saison || SB().saisons[0];
-  return `<select class="auswahl" data-feld="spiele.saison" aria-label="Saison">${opt.map(([w, t]) => `<option value="${esc(w)}" ${w === a.saison ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
-    <select class="auswahl" data-feld="spiele.hs" aria-label="Halbserie">${[["", "Ganze Saison"], ["Vorrunde", "Vorrunde"], ["Rückrunde", "Rückrunde"]].map(([w, t]) => `<option value="${w}" ${w === a.hs ? "selected" : ""}>${t}</option>`).join("")}</select>`;
-}
-SEITEN.spiele = () => {
+SEITEN.spiele = ([tabParam, teamParam]) => {
   const a = spieleAnsicht();
-  const tabs = [["ergebnisse", "Ergebnisse"], ["tabellen", "Tabellen"], ["bilanzen", "Bilanzen"], ["aufstellung", "Aufstellung"]];
-  const inhalt = { ergebnisse: tabErgebnisse, tabellen: tabTabellen, bilanzen: tabBilanzen, aufstellung: tabAufstellung }[a.tab](a);
+  if (tabParam && a._vor !== `${tabParam}|${teamParam || ""}`) { a._vor = `${tabParam}|${teamParam || ""}`; a.tab = tabParam; if (teamParam) a.team = teamParam; }
+  if (!["spiele", "mannschaften", "saisons"].includes(a.tab)) a.tab = a.tab === "bilanzen" ? "saisons" : a.tab === "tabellen" || a.tab === "aufstellung" ? "mannschaften" : "spiele";
+  const tabs = [["spiele", "Spiele"], ["mannschaften", "Mannschaften"], ["saisons", "Saisons"]];
+  const inhalt = { spiele: tabSpiele, mannschaften: tabMannschaften, saisons: tabSaisons }[a.tab](a);
   return {
-    titel: "Spielbetrieb", rechts: saisonKnopf(a, a.tab === "bilanzen", a.tab !== "tabellen"),
+    titel: "Spielbetrieb", rechts: saisonKnopf(a, a.tab === "saisons", a.tab !== "mannschaften"),
     kopf: segmente("spiele", "tab", tabs, a.tab),
     inhalt,
   };
 };
-function tabErgebnisse(a) {
-  const saison = a.saison === "*" ? SB().aktuelle_saison : a.saison;
-  const spiele = spieleFilter({ saison, hs: a.hs }).filter((s) => s.ergebnis);
-  const bil = mannschaftsbilanz(spiele);
-  const kacheln = bil.length ? `<div class="kacheln zwei">${bil.map((m) => {
-    const tp = tabellenPlatz(saison, m.nr);
-    return `<div class="kachel" style="cursor:default"><span class="k">${esc(teamName(m.nr))}</span><span class="w">${tp ? tp.platz + ". Platz" : `${m.s}/${m.u}/${m.n}`}</span><span class="u">${m.pk[0]}:${m.pk[1]} Punkte</span></div>`;
-  }).join("")}</div>` : "";
-  const nachTeam = {};
-  for (const s of spiele) (nachTeam[s.mannschaft] = nachTeam[s.mannschaft] || []).push(s);
-  const listen = Object.keys(nachTeam).sort((x, y) => x - y).map((nr) => `${abschnitt(teamName(Number(nr)))}<div class="karte dicht">
-    ${nachTeam[nr].map((s) => `<button class="zeile" data-go="#/spiel/${encodeURIComponent(s.key)}"><div class="haupt"><span class="titel">${s.heim ? "gegen" : "bei"} ${esc(s.gegner)}</span><span class="unter">${esc(wtDatum(s.datum))}${s.nur_ergebnis ? " · ohne Spielbericht" : ""}</span></div>
-      ${pille(`${s.ergebnis[0]}:${s.ergebnis[1]}`, ergebnisArt(s.ergebnis))}${CHEV}</button>`).join("")}</div>`).join("");
-  return `${kacheln}${listen || `<div class="karte"><span class="leer">Für diese Auswahl sind keine Spielberichte eingelesen.</span></div>`}`;
+function spieleAnsicht() {
+  const sb = SB();
+  return ansicht("spiele", { tab: "spiele", saison: sb.aktuelle_saison || sb.saisons[0] || "*", hs: "", team: "" });
+}
+function teamsDerSaison(saison) {
+  const nr = new Set(SB().spiele.filter((s) => s.saison === saison).map((s) => s.mannschaft));
+  for (const l of SB().tabellen?.[saison]?.ligen || []) for (const z of l.zeilen) if (z.eigen && z.mannschaft) nr.add(z.mannschaft);
+  return [...nr].filter(Boolean).sort((x, y) => x - y);
+}
+function spielZeile(s, kommend) {
+  const ergebnis = s.ergebnis ? pille(`${s.ergebnis[0]}:${s.ergebnis[1]}`, ergebnisArt(s.ergebnis)) : "";
+  const unter = kommend
+    ? [s.uhrzeit, s.team, s.platz ? `wir ${s.platz}.` : "", s.platz_gegner ? `Gegner ${s.platz_gegner}.` : ""]
+    : [teamName(s.mannschaft), s.liga, s.kampflos ? "kampflos" : s.nur_ergebnis ? "ohne Spielbericht" : ""];
+  const ziel = kommend ? `data-akt="umschaltenWert" data-feld="spiele.offen|${esc(s.key)}"` : `data-go="#/spiel/${encodeURIComponent(s.key)}"`;
+  const offen = kommend && ansicht("spiele").offen === s.key;
+  return `<div class="eintrag"><button class="zeile" ${ziel}>${datumsblock(s.datum)}${streifen(teamFarbe(s.mannschaft))}
+    <div class="haupt"><span class="titel">${s.heim ? "gegen" : "bei"} ${esc(s.gegner)}</span><span class="unter">${esc(unter.filter(Boolean).join(" · "))}</span>${kommend && s.einordnung ? `<span class="pillzeile">${einordnungPille(s.einordnung)}</span>` : ""}</div>
+    ${ergebnis}${kommend ? `<span style="color:var(--chev);display:flex">${ic(offen ? "chevunten" : "chev", 18)}</span>` : CHEV}</button>
+    ${offen ? `<div class="aufklapp-inhalt spielgross" style="padding:10px 14px 12px">${spielGross(s, false)}</div>` : ""}</div>`;
+}
+function tabSpiele(a) {
+  const sb = SB();
+  const saison = a.saison === "*" ? sb.aktuelle_saison : a.saison;
+  const teams = teamsDerSaison(saison);
+  if (a.team && !teams.includes(Number(a.team))) a.team = "";
+  const passt = (s) => !a.team || String(s.mannschaft) === String(a.team);
+  const gespielt = spieleFilter({ saison, hs: a.hs }).filter((s) => s.ergebnis && passt(s)).sort((x, y) => y.datum.localeCompare(x.datum));
+  const kommend = saison === sb.aktuelle_saison && (!a.hs || a.hs === sb.aktuelle_halbserie) ? kommendeSpiele().filter(passt) : [];
+  const zaehl = (nr) => spieleFilter({ saison, hs: a.hs }).filter((s) => s.mannschaft === nr && s.ergebnis).length + (saison === sb.aktuelle_saison ? kommendeSpiele().filter((s) => s.mannschaft === nr).length : 0);
+  const chipsHtml = teams.length > 1 ? `<div class="chips">${[["", `Alle`], ...teams.map((nr) => [String(nr), teamName(nr)])].map(([w, t]) =>
+    `<button class="chip ${w === (a.team || "") ? "aktiv" : ""}" data-akt="setze" data-feld="spiele.team" data-wert="${w}">${esc(t)} <span class="anz">${w ? zaehl(Number(w)) : ""}</span></button>`).join("")}</div>` : "";
+  const heuteLinie = `<div class="heute-linie"><span></span><b>HEUTE · ${esc(WT[heute().getDay()].toUpperCase())} ${dmy(isoTag(heute()), false)}</b><span></span></div>`;
+  return `${chipsHtml}
+    ${kommend.length ? `${abschnitt("Demnächst")}<div class="karte dicht">${kommend.slice(0, a.alleKommend ? 99 : 6).map((s) => spielZeile(s, true)).join("")}
+      ${kommend.length > 6 ? `<button class="zeile" data-akt="umschalten" data-feld="spiele.alleKommend" data-wert="1" style="justify-content:center;color:var(--accent);font-weight:600">${a.alleKommend ? "Weniger zeigen" : `Alle ${kommend.length} Spiele zeigen`}</button>` : ""}</div>${heuteLinie}` : ""}
+    ${abschnitt("Gespielt")}<div class="karte dicht">${gespielt.map((s) => spielZeile(s, false)).join("") || `<div class="zeile"><span class="leer">Für diese Auswahl sind keine Ergebnisse da.</span></div>`}</div>`;
+}
+function tabMannschaften(a) {
+  const sb = SB();
+  const saison = a.saison === "*" ? sb.aktuelle_saison : a.saison;
+  const teams = teamsDerSaison(saison);
+  if (!teams.length) return `<div class="karte"><span class="leer">Für ${esc(saison)} gibt es keine Mannschaften.</span></div>`;
+  const nr = teams.includes(Number(a.team)) ? Number(a.team) : teams[0];
+  const chipsHtml = teams.length > 1 ? `<div class="chips">${teams.map((n) => `<button class="chip ${n === nr ? "aktiv" : ""}" data-akt="setze" data-feld="spiele.team" data-wert="${n}">${esc(teamName(n))}</button>`).join("")}</div>` : "";
+  const tp = tabellenPlatz(saison, nr);
+  const spiele = spieleFilter({ saison, team: nr }).filter((s) => s.ergebnis);
+  const mb = mannschaftsbilanz(spiele)[0];
+  const form = saison === sb.aktuelle_saison ? formAusSpielen(nr, 5) : [];
+  const farbe = teamFarbe(nr);
+  const kacheln = `<div class="kachelreihe drei">
+    ${kachel2({ titel: "Platz", wert: tp ? `${tp.platz}.` : "–", unter: tp ? `von ${tp.von}` : "keine Tabelle", farbe })}
+    ${kachel2({ titel: "Punkte", wert: tp?.punkte ? tp.punkte.join(":") : mb ? `${mb.pk[0]}:${mb.pk[1]}` : "–", unter: mb ? `Spiele ${mb.sp[0]}:${mb.sp[1]}` : "", farbe })}
+    ${kachel2({ titel: "Bilanz", wert: mb ? `${mb.s}-${mb.u}-${mb.n}` : "–", unter: mb ? `${mb.beg} Begegnungen` : "", farbe })}</div>`;
+  // Tabelle der Liga (mit Form, Heim, Auswärts aus dem Spielplan)
+  const art = a.tart || "tabelle";
+  const t = sb.tabellen?.[saison];
+  const liga = tp && t ? t.ligen.find((l) => l.liga === tp.liga) : null;
+  const an = tp ? ligaAnalyse(tp.liga, saison) : null;
+  let tabelle = "";
+  if (an && art !== "tabelle") {
+    tabelle = `<table class="tabelle"><thead><tr><th>Pl.</th><th>Mannschaft</th><th>Sp.</th><th>Punkte</th><th>Form</th></tr></thead><tbody>
+      ${(an.tabellen[art] || []).map((z) => `<tr class="${z.eigen ? "eigen" : ""}" data-go="#/form/${encodeURIComponent(an.liga)}/${encodeURIComponent(z.name)}" style="cursor:pointer"><td>${z.platz}</td><td>${esc(z.name)}</td><td>${z.begegnungen}</td><td>${z.punkte.join(":")}</td><td class="formzelle">${formKaestchen(z.form.slice(-5))}</td></tr>`).join("")}</tbody></table>`;
+  } else if (liga) {
+    tabelle = `<table class="tabelle ${an ? "mitform" : ""}"><thead><tr><th>Pl.</th><th>Mannschaft</th><th>Sp.</th><th>Spiele</th><th>Punkte</th>${an ? "<th>Form</th>" : ""}</tr></thead><tbody>
+      ${liga.zeilen.map((z) => { const tn = an && Object.keys(an.teams).find((n) => norm(n) === norm(z.name) || (z.eigen && an.eigene[n] === z.mannschaft));
+        return `<tr class="${z.eigen ? "eigen" : ""}"${tn ? ` data-go="#/form/${encodeURIComponent(an.liga)}/${encodeURIComponent(tn)}" style="cursor:pointer"` : ""}><td>${z.platz ?? ""}</td><td>${esc(z.name)} ${z.zeichen && ZEICHEN[z.zeichen] ? `<span class="zeichen" style="color:${z.zeichen.includes("ab") || z.zeichen === "zurueck" ? "var(--p-rot)" : "var(--p-gruen)"}">${ZEICHEN[z.zeichen]}</span>` : ""}</td><td>${z.beg ?? ""}</td><td>${z.spiele ? z.spiele.join(":") : ""}</td><td>${z.punkte ? z.punkte.join(":") : ""}</td>${an ? `<td class="formzelle">${tn ? formKaestchen(an.teams[tn].form.slice(-5)) : ""}</td>` : ""}</tr>`; }).join("")}</tbody></table>`;
+  }
+  const tabKarte = tabelle ? `<div class="karte" style="padding:12px 4px 4px;gap:10px"><div style="padding:0 10px;display:flex;align-items:baseline;gap:8px"><h2 style="font-size:16px;flex:1">${esc(tp.liga)}</h2><span class="klein gedimmt">Stand ${esc(dmy(t?.stand || ""))}</span></div>
+    ${an ? `<div style="padding:0 10px">${segmente("spiele", "tart", [["tabelle", "Tabelle"], ["form", "Form"], ["heim", "Heim"], ["auswaerts", "Auswärts"]], art)}</div>` : ""}${tabelle}</div>
+    <span class="hinweis">▲ Aufstieg · △ Relegation · ▼ Abstieg${an ? " · Mannschaft antippen: Formanalyse" : ""}</span>` : `<div class="karte"><span class="leer">Für ${esc(teamName(nr))} ist in ${esc(saison)} keine Tabelle eingelesen.</span></div>`;
+  // Aufstellung mit Einzelbilanz der Halbserie
+  let hs = a.hs || (saison === sb.aktuelle_saison ? sb.aktuelle_halbserie : (sb.aufstellungen?.[`${saison}|Rückrunde`] ? "Rückrunde" : "Vorrunde"));
+  const auf = (sb.aufstellungen?.[`${saison}|${hs}`] || []).find((x) => x.nr === nr);
+  const bil = spielerbilanz(spieleFilter({ saison, hs, team: nr }));
+  const aufKarte = auf ? `${abschnitt(`Aufstellung ${hs}`)}<div class="karte dicht">${auf.spieler.map((p, i) => { const b = bil.find((x) => x.pid === p.pid);
+      return `<button class="zeile" ${sb.spieler[p.pid] ? `data-go="#/spieler/${encodeURIComponent(p.pid)}"` : ""}><span class="rangkreis" style="--k:${farbe}">${i + 1}</span>
+      <div class="haupt"><span class="titel">${esc(p.vorname)} ${esc(p.nachname)}</span><span class="unter">${[(Array.isArray(p.qttr) ? p.qttr[0] : p.qttr) ? `Q-TTR ${Array.isArray(p.qttr) ? p.qttr[0] : p.qttr}` : "", p.status, p.bem].filter(Boolean).map(esc).join(" · ")}</span></div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end"><span class="fett zahl">${b ? `${b.e[0]}:${b.e[1]}` : "–"}</span><span class="klein gedimmt">${b ? `Doppel ${b.d[0]}:${b.d[1]}` : ""}</span></div></button>`; }).join("")}</div>
+    ${auf.fuehrer ? `<span class="hinweis">Mannschaftsführer: ${esc(auf.fuehrer)} · rechts Einzel- und Doppelbilanz ${esc(hs)}</span>` : ""}` : "";
+  const eigen = an && Object.keys(an.eigene || {}).find((n) => an.eigene[n] === nr);
+  return `${chipsHtml}${kacheln}${form.length ? `<div class="formzeile"><span class="klein gedimmt">Form</span>${formKaestchen(form)}</div>` : ""}${tabKarte}${aufKarte}
+    <div style="display:flex;flex-direction:column;gap:6px;padding:0 4px">${eigen ? `<a class="link" data-go="#/form/${encodeURIComponent(an.liga)}/${encodeURIComponent(eigen)}">Formanalyse ${esc(teamName(nr))} ›</a>` : ""}
+    <a class="link" data-akt="gegnerTeam" data-wert="${nr}">Bilanz gegen alle Gegner ›</a></div>`;
+}
+function tabSaisons(a) {
+  // Platzierungen je Saison (wie am PC „Saisons & Gegner“), darunter die Bilanzen der gewählten Saison
+  const nachSaison = {};
+  for (const x of SB().saison_ergebnisse || []) (nachSaison[x.saison] = nachSaison[x.saison] || []).push(x);
+  const saisons = Object.keys(nachSaison).sort().reverse();
+  const zeigeAlle = a.alleSaisons;
+  const platz = saisons.length ? `<div class="karte dicht">${(zeigeAlle ? saisons : saisons.slice(0, 4)).map((s) => `<div class="gruppe-kopf">${esc(s)}<span>${nachSaison[s].length} Mannschaft${nachSaison[s].length === 1 ? "" : "en"}</span></div>
+    ${nachSaison[s].sort((x, y) => (x.mannschaft || 9) - (y.mannschaft || 9)).map((x) => `<div class="zeile kompakt">${streifen(teamFarbe(x.mannschaft))}<div class="haupt"><span class="titel">${esc(vereinsTeam(x.mannschaft))}</span><span class="unter">${esc(x.liga)}${x.bemerkung ? " · " + esc(x.bemerkung) : ""}</span></div>
+      <span class="fett">${x.platz ? x.platz + "." : "–"}<span class="gedimmt" style="font-weight:500"> / ${x.von || "–"}</span></span>${x.zeichen && ZEICHEN[x.zeichen] ? `<span class="zeichen" style="color:${x.zeichen.includes("ab") ? "var(--p-rot)" : "var(--p-gruen)"}">${ZEICHEN[x.zeichen]}</span>` : ""}</div>`).join("")}`).join("")}
+    ${saisons.length > 4 ? `<button class="zeile" data-akt="umschalten" data-feld="spiele.alleSaisons" data-wert="1" style="justify-content:center;color:var(--accent);font-weight:600">${zeigeAlle ? "Weniger zeigen" : `Alle ${saisons.length} Saisons zeigen`}</button>` : ""}</div>` : "";
+  return `${platz ? `${abschnitt("Platzierungen")}${platz}` : ""}${abschnitt(`Bilanzen${a.saison === "*" ? " aller Saisons" : " " + a.saison}`)}${tabBilanzen(a)}`;
 }
 const ZEICHEN = { auf: "▲", rel_auf: "△", ab: "▼", rel_ab: "▽", zurueck: "✕" };
-function tabTabellen(a) {
-  const saison = a.saison === "*" ? SB().aktuelle_saison : a.saison;
-  const t = SB().tabellen?.[saison];
-  const art = a.tart || "tabelle";
-  const hatAnalyse = (SB().ligen_analyse || []).some((x) => x.saison === saison);
-  const auswahl = hatAnalyse ? `<div class="chips">${[["tabelle", "Tabelle"], ["form", "Form"], ["heim", "Heim"], ["auswaerts", "Auswärts"]].map(([w, txt]) =>
-    `<button class="chip ${w === art ? "aktiv" : ""}" data-akt="setze" data-feld="spiele.tart" data-wert="${w}">${txt}</button>`).join("")}</div>` : "";
-  if (art !== "tabelle" && hatAnalyse) {
-    return auswahl + (SB().ligen_analyse || []).filter((x) => x.saison === saison).map((an) => `<div class="karte" style="padding:12px 4px 4px">
-      <div style="padding:0 10px">${kartenTitel(an.liga)}</div>
-      <table class="tabelle"><thead><tr><th>Pl.</th><th>Mannschaft</th><th>Sp.</th><th>Punkte</th><th>Form</th></tr></thead><tbody>
-      ${(an.tabellen[art] || []).map((z) => `<tr class="${z.eigen ? "eigen" : ""}" data-go="#/form/${encodeURIComponent(an.liga)}/${encodeURIComponent(z.name)}" style="cursor:pointer"><td>${z.platz}</td><td>${esc(z.name)}</td><td>${z.begegnungen}</td><td>${z.punkte.join(":")}</td><td class="formzelle">${formPunkte(z.form.slice(-5))}</td></tr>`).join("")}
-      </tbody></table></div>`).join("") + `<span class="hinweis">${art === "form" ? "Nur die letzten fünf Spiele je Mannschaft." : art === "heim" ? "Nur Heimspiele." : "Nur Auswärtsspiele."} Aus dem Spielplan von mytischtennis.de berechnet · Mannschaft antippen: Formanalyse</span>`;
-  }
-  if (!t) return auswahl + `<div class="karte"><span class="leer">Für ${esc(saison)} ist keine Tabelle eingelesen.</span></div>`;
-  return auswahl + t.ligen.filter((l) => l.zeilen.some((z) => z.eigen)).concat(t.ligen.filter((l) => !l.zeilen.some((z) => z.eigen))).map((l) => `<div class="karte" style="padding:12px 4px 4px">
-    <div style="padding:0 10px">${kartenTitel(l.liga)}</div>
-    <table class="tabelle"><thead><tr><th>Pl.</th><th>Mannschaft</th><th>Sp.</th><th>Spiele</th><th>Punkte</th></tr></thead><tbody>
-    ${l.zeilen.map((z) => { const an = ligaAnalyse(l.liga, saison); const tn = an && Object.keys(an.teams).find((n) => norm(n) === norm(z.name) || (z.eigen && an.eigene[n] === z.mannschaft));
-      return `<tr class="${z.eigen ? "eigen" : ""}"${tn ? ` data-go="#/form/${encodeURIComponent(an.liga)}/${encodeURIComponent(tn)}" style="cursor:pointer"` : ""}><td>${z.platz ?? ""}</td><td>${esc(z.name)} ${z.zeichen && ZEICHEN[z.zeichen] ? `<span class="zeichen" style="color:${z.zeichen.includes("ab") || z.zeichen === "zurueck" ? "var(--p-rot)" : "var(--p-gruen)"}">${ZEICHEN[z.zeichen]}</span>` : ""}</td><td>${z.beg ?? ""}</td><td>${z.spiele ? z.spiele.join(":") : ""}</td><td>${z.punkte ? z.punkte.join(":") : ""}</td></tr>`; }).join("")}
-    </tbody></table></div>`).join("") + `<span class="hinweis">Stand der Tabelle: ${esc(dmy(t.stand))}${t.live ? " (von mytischtennis.de, automatisch abgerufen)" : ""}. ▲ Aufstieg · △ Relegation · ▼ Abstieg</span>`;
-}
 function tabBilanzen(a) {
   const unter = a.bil || "spieler";
   const reiter = `<div class="chips">${[["mannschaften", "Mannschaften"], ["spieler", "Spieler"], ["doppel", "Doppel"], ["gegner", "Gegner"]].map(([w, t]) =>
@@ -1048,20 +1310,6 @@ function tabBilanzTeile(a) {
   };
 }
 AKTIONEN.gegnerTeam = (el) => { const g = ansicht("gegner", { team: "", suche: "", sort: "beg", offen: "" }); g.team = el.dataset.wert; g.offen = ""; geh("#/gegner"); };
-function tabAufstellung(a) {
-  const sb = SB();
-  const saison = a.saison === "*" ? sb.aktuelle_saison : a.saison;
-  let hs = a.hs;
-  if (!hs) hs = saison === sb.aktuelle_saison ? sb.aktuelle_halbserie : (sb.aufstellungen?.[`${saison}|Rückrunde`] ? "Rückrunde" : "Vorrunde");
-  const teams = sb.aufstellungen?.[`${saison}|${hs}`] || [];
-  if (!teams.length) return `<div class="karte"><span class="leer">Für ${esc(saison)} ${esc(hs)} ist keine Aufstellung erfasst.</span></div>`;
-  return teams.map((t) => `<div class="karte dicht"><div class="gruppe-kopf">${esc(t.team || t.name)}<span>${esc(t.liga)}${t.fuehrer ? " · MF " + esc(t.fuehrer) : ""}</span></div>
-    ${t.spieler.map((p, i) => `<button class="zeile" ${sb.spieler[p.pid] ? `data-go="#/spieler/${encodeURIComponent(p.pid)}"` : ""}><span class="gedimmt" style="width:30px;font-size:13px">${t.nr}.${i + 1}</span>
-      <div class="haupt"><span class="titel" style="font-size:14px">${esc(p.nachname)}, ${esc(p.vorname)}</span>${p.bem ? `<span class="unter">${esc(p.bem)}</span>` : ""}</div>
-      ${p.status ? pille(p.status, "gelb") : ""}<span class="zahl gedimmt" style="width:44px;text-align:right">${(Array.isArray(p.qttr) ? p.qttr[0] : p.qttr) ?? ""}</span></button>`).join("")}</div>`).join("")
-    + `<span class="hinweis">${esc(saison)} · ${esc(hs)} · Zahlen rechts: Q-TTR zum Stichtag der Halbserie.</span>`;
-}
-
 SEITEN.spiel = ([key]) => {
   const s = SB().spiele.find((x) => x.key === key);
   if (!s) return { titel: "Spiel", zurueck: ["#/spiele", "Spielbetrieb"], inhalt: `<div class="karte"><span class="leer">Spiel nicht gefunden.</span></div>` };
@@ -1161,9 +1409,9 @@ SEITEN.mehr = () => {
   return {
     titel: "Mehr",
     inhalt: `<div class="karte dicht nur-handy">
-        ${menuZeile("#/organisation", "org", "blau", "Vereinsorganisation", "Versammlungen, Vorstand, Satzung, Finanzamt, Training")}
-        ${menuZeile("#/vereinsleben", "leben", "rosa", "Vereinsleben", "Feste, Ausflüge, Turniere mit Bildern")}
-        ${menuZeile("#/dokumente", "dok", "gelb", "Dokumente", "Alle PDFs nach Bereich")}</div>
+        ${menuZeile("#/organisation", "org", "blau", "Organisation", "Versammlungen, Vorstand und Satzung, Finanzamt, Training und Hallen")}
+        ${menuZeile("#/vereinsleben", "leben", "rosa", "Vereinsleben", "Feiern, Turniere und Aktionen mit Bildern")}
+        ${menuZeile("#/dokumente", "dok", "gelb", "Dokumente", "Alle Dateien nach Bereich, Spielberichte nach Saison")}</div>
       ${abschnitt("Auf diesem Gerät")}
       <div class="karte dicht">
         <div style="padding:12px 14px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid var(--gitter)">
@@ -1184,63 +1432,96 @@ SEITEN.mehr = () => {
 // ===================================================================================================== Organisation
 SEITEN.organisation = ([tabParam]) => {
   const o = S.daten.organisation || {};
-  const a = { tab: tabParam || "uebersicht" };
-  const tabs = [["uebersicht", "Organisation"], ["versammlungen", "Versammlungen"], ["vorstand", "Vorstand und Satzung"], ["finanzamt", "Finanzamt und Register"], ["training", "Training und Spiellokale"], ["berichte", "Tätigkeitsberichte"]];
-  const t = heute();
+  const tabs = [["versammlungen", "Versammlungen"], ["vorstand", "Vorstand und Satzung"], ["finanzamt", "Finanzamt"], ["training", "Training und Hallen"], ["berichte", "Tätigkeitsberichte"]];
+  const a = ansicht("organisation", { tab: "versammlungen", suche: "" });
+  if (tabParam && a._vor !== tabParam) { a._vor = tabParam; a.tab = tabParam; }
+  if (!tabs.some(([w]) => w === a.tab)) a.tab = "versammlungen";
+  const t = heute(), tIso = isoTag(t);
   const vers = o.versammlungen || [];
-  const kommend = vers.filter((v) => datum(v.datum) >= t).sort((x, y) => x.datum.localeCompare(y.datum));
-  const vergangen = vers.filter((v) => datum(v.datum) < t);
-  const versZeile = (v) => {
-    const d = datum(v.datum);
-    const einl = v.einladung_bis && datum(v.datum) >= t ? pille(`Einladung bis ${dmy(v.einladung_bis, false)}`, tageBis(v.einladung_bis) < 0 ? "rot" : "gelb") : CHEV;
-    return `<button class="zeile" style="padding-left:0;padding-right:0" data-go="#/versammlung/${encodeURIComponent(v.id)}"><div class="datumsblock"><span>${MON[d.getMonth()]}</span><b>${d.getDate()}</b></div>
-      <div class="haupt"><span class="titel" style="font-size:14px">${esc(v.titel)}</span><span class="unter">${esc(WT[d.getDay()])} ${dmy(v.datum)}${v.uhrzeit ? " · " + esc(v.uhrzeit) : ""}${v.ort ? " · " + esc(v.ort) : ""}</span></div>${einl}</button>`;
-  };
-  const amt = (x) => `<div style="display:flex;align-items:center;gap:10px">${avatar(x.name.split(" ")[0], x.name.split(" ").slice(-1)[0])}<div style="display:flex;flex-direction:column"><span style="font-size:14px;font-weight:600">${esc(x.name)}</span><span class="klein gedimmt">${esc(x.amt)}${x.im_amt ? "" : ` · ${dmy(x.von)} – ${dmy(x.bis)}`}</span></div></div>`;
-  const vorstandJetzt = (o.vorstand || []).filter((x) => x.im_amt);
-  const geltend = (o.fassungen || []).filter((f) => f.status === "gilt");
   const e = o.eckdaten || {};
-  const wochenplan = (o.wochenplan || []);
-  const hallenFarben = ["blau", "tuerkis", "lila", "gelb"];
-  const hallenIndex = {}; (o.orte || []).forEach((x, i) => (hallenIndex[x.id] = hallenFarben[i % hallenFarben.length]));
-  const wochenKarte = `<div class="karte">${kartenTitel("Training und Spiellokale")}
-    ${wochenplan.map((z) => `<div style="display:flex;gap:10px;align-items:center"><span style="width:26px;font-size:13px;font-weight:700" class="gedimmt">${esc(z.tag_text.slice(0, 2))}</span>
-      <div class="pille ${hallenIndex[z.ort] || ""}" style="flex:1;justify-content:flex-start;gap:10px;padding:8px 10px;border-radius:10px;font-size:13px"><b style="width:92px">${esc(z.von)}–${esc(z.bis)}</b><span style="font-weight:500;white-space:normal">${esc(z.ort_name)}${z.gruppe ? " · " + esc(z.gruppe) : ""}</span></div></div>`).join("") || `<span class="leer">Kein Wochenplan erfasst.</span>`}
-    ${(o.orte || []).map((x) => `<div class="trenner"></div><div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:14px;font-weight:600">${esc(x.name)}</span>
-      <span class="klein gedimmt">${[x.tische ? x.tische + " Tische" : "", x.adresse, x.antrag_frist ? "Hallenantrag bis " + x.antrag_frist : ""].filter(Boolean).map(esc).join(" · ")}</span>
-      ${x.schluessel ? `<span class="klein gedimmt">Schlüssel: ${esc(x.schluessel)}</span>` : ""}
-      ${x.ansprechpartner ? `<span class="klein gedimmt">Ansprechpartner: ${esc(x.ansprechpartner)}${x.telefon ? " · " + esc(x.telefon) : ""}</span>` : ""}
-      ${(x.dokumente || []).map((d) => pdfZeile(d, d.datum ? dmy(d.datum) : "PDF")).join("")}</div>`).join("")}</div>`;
-  const finanzamtKarte = `<div class="karte dicht"><div style="padding:14px 14px 4px">${kartenTitel("Finanzamt und Register")}</div>
+  const wochenplan = o.wochenplan || [];
+  // Kacheln wie am PC (k_org): nächste Versammlung, Amtszeit, Gemeinnützigkeit, Hallenantrag
+  const kommendeV = vers.filter((v) => v.datum >= tIso).sort((x, y) => x.datum.localeCompare(y.datum));
+  const versTermin = kommendeV[0] || (S.daten.kalender?.termine || []).filter((x) => x.bereich === "Versammlungen" && x.datum >= tIso)[0];
+  const amtsAnteil = o.letzte_wahl && o.amtszeit_ende ? (t - datum(o.letzte_wahl)) / (datum(o.amtszeit_ende) - datum(o.letzte_wahl)) * 100 : null;
+  const naechsteAntrag = (o.orte || []).map((x) => x.antrag_frist).filter(Boolean).map((f) => { const [tg, mo] = f.split(".").map(Number); let d = new Date(t.getFullYear(), mo - 1, tg); if (d < t) d = new Date(t.getFullYear() + 1, mo - 1, tg); return d; }).sort((x, y) => x - y)[0];
+  const kacheln = `<div class="kachelreihe vier">
+    ${kachel2({ titel: "Nächste Versammlung", wert: versTermin ? dmy(versTermin.datum, false) : "–", unter: versTermin ? `${versTermin.titel} ›` : "keine geplant", farbe: "#1e8a4a", ziel: versTermin?.id ? `#/versammlung/${encodeURIComponent(versTermin.id)}` : "#/kalender" })}
+    ${kachel2({ titel: "Amtszeit Vorstand", wert: o.amtszeit_ende ? `bis ${String(o.amtszeit_ende).slice(5, 7)}/${String(o.amtszeit_ende).slice(0, 4)}` : "–", unter: o.letzte_wahl ? `gewählt ${dmy(o.letzte_wahl)}` : "", farbe: "#7a4fc0", balken: amtsAnteil, ziel: "#/organisation/vorstand" })}
+    ${kachel2({ titel: "Gemeinnützig", wert: e.gemeinnuetzig_bis ? `bis ${String(e.gemeinnuetzig_bis).slice(0, 4)}` : "–", unter: o.bescheid?.vom ? `Bescheid ${dmy(o.bescheid.vom)} ›` : "", farbe: e.gemeinnuetzig_bis && tageBis(e.gemeinnuetzig_bis) < 90 ? "#c08a00" : "#1e8a4a", ziel: "#/organisation/finanzamt" })}
+    ${kachel2({ titel: "Hallenantrag", wert: naechsteAntrag ? dmy(isoTag(naechsteAntrag), false) : "–", unter: naechsteAntrag ? `in ${Math.round((naechsteAntrag - t) / 86400000)} Tagen ›` : "keine Frist", farbe: "#6b7280", ziel: "#/organisation/training" })}</div>`;
+
+  // Versammlungen als Liste mit Stand der Unterlagen
+  const stand = (v) => {
+    const dok = (r) => (v.dokumente || []).some((d) => d.rolle === r);
+    const teile = [["Einladung", dok("einladung") || (v.tagesordnung || []).length > 0], ["Protokoll", !!v.protokoll || dok("protokoll")]];
+    if (v.datum < tIso) teile.push(["Kurzfassung", (v.kurzfassung || []).length > 0]);
+    return `<span class="unterlagen">${teile.map(([n, ok]) => `<span class="${ok ? "ok" : ""}"><i>${ok ? "✓" : ""}</i>${n}</span>`).join("")}</span>`;
+  };
+  const versZeile = (v) => {
+    const d = datum(v.datum), kommend = v.datum >= tIso;
+    const rechts = kommend ? (v.einladung_bis ? pille(`Einladung bis ${dmy(v.einladung_bis, false)}`, tageBis(v.einladung_bis) < 0 ? "rot" : "gelb") : pille(`in ${tageBis(v.datum)} Tagen`, "blau"))
+      : !v.protokoll && !(v.dokumente || []).some((x) => x.rolle === "protokoll") ? pille("Protokoll fehlt", "gelb") : "";
+    const unter = [v.uhrzeit, v.ort ? v.ort.split(",")[0] : "", (v.beschluesse || []).length ? `${v.beschluesse.length} Beschlüsse` : "", v.protokoll?.stimmberechtigt ? `${v.protokoll.stimmberechtigt} stimmberechtigt` : ""].filter(Boolean).join(" · ");
+    return `<button class="zeile" data-go="#/versammlung/${encodeURIComponent(v.id)}">${datumsblock(v.datum)}<div class="haupt"><span class="titel">${esc(v.titel)}</span><span class="unter">${esc(unter)}</span>${stand(v)}</div>${rechts}${CHEV}</button>`;
+  };
+  TEILE.versliste = () => {
+    const q = norm(ansicht("organisation").suche);
+    const passt = (v) => !q || norm(`${v.titel} ${v.art} ${(v.tagesordnung || []).join(" ")} ${(v.kurzfassung || []).join(" ")} ${(v.beschluesse || []).map((b) => b.antrag).join(" ")}`).includes(q);
+    const kommend = kommendeV.filter(passt), gruppen = {};
+    for (const v of vers.filter((x) => x.datum < tIso && passt(x))) (gruppen[v.datum.slice(0, 4)] = gruppen[v.datum.slice(0, 4)] || []).push(v);
+    const geplant = (S.daten.kalender?.termine || []).filter((x) => x.bereich === "Versammlungen" && x.datum >= tIso && !kommend.some((v) => v.datum === x.datum) && passt({ titel: x.titel, art: "" }));
+    return (kommend.length || geplant.length ? `${abschnitt("Demnächst")}<div class="karte dicht">${kommend.map(versZeile).join("")}
+        ${geplant.map((x) => `<button class="zeile" data-go="#/kalender">${datumsblock(x.datum)}<div class="haupt"><span class="titel">${esc(x.titel)}</span><span class="unter">${esc([x.uhrzeit, x.ort, "nur im Kalender"].filter(Boolean).join(" · "))}</span></div>${pille(`in ${tageBis(x.datum)} Tagen`, "blau")}</button>`).join("")}</div>` : "")
+      + Object.keys(gruppen).sort().reverse().map((j) => `${abschnitt(j)}<div class="karte dicht">${gruppen[j].map(versZeile).join("")}</div>`).join("")
+      || `<div class="karte"><span class="leer">Keine Versammlung gefunden.</span></div>`;
+  };
+  const versammlungen = `${suchfeld("organisation", "suche", "Versammlungen und Beschlüsse durchsuchen", "versliste")}<div style="display:flex;flex-direction:column;gap:12px" data-teil-ziel="versliste">${TEILE.versliste()}</div>`;
+
+  // Vorstand und Satzung: Ämter als Karten
+  const vorstandJetzt = (o.vorstand || []).filter((x) => x.im_amt);
+  const frueher = (o.vorstand || []).filter((x) => !x.im_amt);
+  const amtKarte = (x) => `<div class="amt">${avatar(x.name.split(" ")[0], x.name.split(" ").slice(-1)[0])}<div style="display:flex;flex-direction:column;min-width:0"><span class="klein gedimmt">${esc(x.amt)}</span><span style="font-weight:600">${esc(x.name)}</span><span class="klein gedimmt">${x.im_amt ? `seit ${dmy(x.von)}` : `${dmy(x.von)} – ${dmy(x.bis)}`}</span></div></div>`;
+  const vorstand = `<div class="karte">${kartenTitel("Vorstand")}${o.letzte_wahl ? `<span class="klein gedimmt" style="margin-top:-6px">gewählt am ${dmy(o.letzte_wahl)}${o.amtszeit_ende ? ` · Amtszeit bis ${dmy(o.amtszeit_ende)}` : ""}${o.wahlperiode_jahre ? ` (${esc(o.wahlperiode_jahre)} Jahre)` : ""}</span>` : ""}
+      ${amtsAnteil != null ? `<span class="kbalken gross"><span style="width:${Math.max(0, Math.min(100, amtsAnteil))}%"></span></span>` : ""}
+      <div class="aemter">${vorstandJetzt.map(amtKarte).join("") || `<span class="leer">Kein Vorstand erfasst.</span>`}</div></div>
+    ${frueher.length ? `<div class="karte">${kartenTitel("Frühere Amtszeiten")}<div class="aemter">${frueher.map(amtKarte).join("")}</div></div>` : ""}
+    <div class="karte">${kartenTitel("Satzung und Ordnungen")}${(o.fassungen || []).map((f) => f.dokument ? pdfZeile({ ...f.dokument, titel: `${f.ordnung} (${f.status})` }, "ab " + dmy(f.gueltig_ab)) : `<span class="klein">${esc(f.ordnung)} ab ${dmy(f.gueltig_ab)} (${esc(f.status)})</span>`).join("") || `<span class="leer">Keine Fassung erfasst.</span>`}</div>
+    ${e.kuendigungsfrist || e.satzungszweck ? `<div class="karte dicht">${[["Zweck", e.satzungszweck], ["Kündigung", e.kuendigungsfrist], ["Beitrag fällig", e.beitragsfaelligkeit], ["Versammlung", e.mitgliederversammlung]].filter(([, w]) => w).map(([k, w]) => `<div class="kv"><span class="k">${k}</span><span class="w">${esc(w)}</span></div>`).join("")}</div>` : ""}`;
+
+  // Finanzamt und Register
+  const finanzamt = `<div class="karte dicht">
     ${e.gemeinnuetzig_bis ? `<div class="kv"><span class="k">Gemeinnützig</span><span class="w">${pille("bis " + dmy(e.gemeinnuetzig_bis), tageBis(e.gemeinnuetzig_bis) < 90 ? "gelb" : "gruen")}</span></div>` : ""}
+    ${o.bescheid?.vom ? `<div class="kv"><span class="k">Freistellungsbescheid</span><span class="w">vom ${dmy(o.bescheid.vom)}${o.bescheid.jahre ? ` für ${esc(o.bescheid.jahre)}` : ""}</span></div>` : ""}
     ${e.steuererklaerung_bis ? `<div class="kv"><span class="k">Steuererklärung</span><span class="w">fällig bis ${dmy(e.steuererklaerung_bis)}</span></div>` : ""}
     ${e.finanzamt ? `<div class="kv"><span class="k">Finanzamt</span><span class="w">${esc(e.finanzamt)}${e.steuernummer ? " · St.-Nr. " + esc(e.steuernummer) : ""}</span></div>` : ""}
-    ${e.registernummer ? `<div class="kv"><span class="k">Vereinsregister</span><span class="w">${esc(e.registergericht)} · ${esc(e.registernummer)}</span></div>` : ""}
-    <div style="padding:4px 14px 10px">${o.bescheid?.dokument ? pdfZeile(o.bescheid.dokument, `vom ${dmy(o.bescheid.vom)}`) : ""}${a.tab === "finanzamt" ? (o.akten || []).map((d) => pdfZeile(d, d.datum ? dmy(d.datum) : "PDF")).join("") : ""}</div></div>`;
-  const vorstandKarte = (alle) => `<div class="karte">${kartenTitel("Vorstand")}${o.letzte_wahl ? `<span class="klein gedimmt" style="margin-top:-6px">gewählt am ${dmy(o.letzte_wahl)}${o.amtszeit_ende ? ` · Amtszeit bis ${dmy(o.amtszeit_ende)}` : ""}</span>` : ""}
-    ${vorstandJetzt.map(amt).join("") || `<span class="leer">Kein Vorstand erfasst.</span>`}
-    ${alle ? (() => { const frueher = (o.vorstand || []).filter((x) => !x.im_amt); return frueher.length ? `<div class="trenner"></div><span class="klein fett gedimmt">FRÜHERE AMTSZEITEN</span>${frueher.map(amt).join("")}` : ""; })() : ""}
-    <div class="trenner"></div>${(alle ? o.fassungen || [] : geltend).map((f) => f.dokument ? pdfZeile({ ...f.dokument, titel: f.ordnung + (alle ? ` (${f.status})` : "") }, "ab " + dmy(f.gueltig_ab)) : `<span class="klein">${esc(f.ordnung)} ab ${dmy(f.gueltig_ab)}</span>`).join("")}
-    ${alle && e.kuendigungsfrist ? `<div class="trenner"></div><div class="karte dicht" style="border:0">${[["Kündigung", e.kuendigungsfrist], ["Beitrag fällig", e.beitragsfaelligkeit], ["Versammlung", e.mitgliederversammlung], ["Zweck", e.satzungszweck]].filter(([, w]) => w).map(([k, w]) => `<div class="kv" style="padding-left:0;padding-right:0"><span class="k">${k}</span><span class="w">${esc(w)}</span></div>`).join("")}</div>` : ""}</div>`;
-  const berichteKarte = `<div class="karte">${kartenTitel("Tätigkeitsberichte")}${(o.taetigkeitsberichte || []).map((d) => pdfZeile(d, d.datum ? dmy(d.datum) : "PDF")).join("") || `<span class="leer">Noch keine Tätigkeitsberichte abgelegt.</span>`}</div>`;
-  const versKarte = (alle) => `<div class="karte">${kartenTitel("Versammlungen")}${kommend.map(versZeile).join("")}${(alle ? vergangen : vergangen.slice(0, 2)).map(versZeile).join("") || (kommend.length ? "" : `<span class="leer">Keine Versammlungen erfasst.</span>`)}</div>`;
-  // Übersicht: eine Zeile je Bereich mit Kurzstatus, Einzelheiten nach Antippen
-  const naechste = kommend[0];
-  const tage = [...new Set(wochenplan.map((z) => z.tag_text.slice(0, 2)))].join(" · ");
-  const bereichZeile = (tab, titel, rechts, unter) => `<button class="zeile" data-go="#/organisation/${tab}"><div class="haupt"><span class="titel">${esc(titel)}</span>${unter ? `<span class="unter">${esc(unter)}</span>` : ""}</div><span class="gedimmt" style="font-size:14px;white-space:nowrap">${rechts}</span>${CHEV}</button>`;
-  const uebersicht = `<div class="karte dicht">
-    ${bereichZeile("versammlungen", "Versammlungen", naechste ? esc(dmy(naechste.datum, false)) : "", naechste ? "nächste: " + naechste.titel : `${vers.length} erfasst`)}
-    ${bereichZeile("vorstand", "Vorstand und Satzung", o.amtszeit_ende ? "bis " + esc(String(o.amtszeit_ende).slice(0, 4)) : "", o.letzte_wahl ? "gewählt am " + dmy(o.letzte_wahl) : "")}
-    ${bereichZeile("finanzamt", "Finanzamt und Register", e.gemeinnuetzig_bis ? pille("gemeinnützig", tageBis(e.gemeinnuetzig_bis) < 90 ? "gelb" : "gruen") : "", e.gemeinnuetzig_bis ? "bis " + dmy(e.gemeinnuetzig_bis) : "")}
-    ${bereichZeile("training", "Training und Spiellokale", esc(tage), (o.orte || []).map((x) => x.name.split(" ").slice(-1)[0]).join(", "))}
-    ${bereichZeile("berichte", "Tätigkeitsberichte", String((o.taetigkeitsberichte || []).length), "")}</div>`;
-  const inhalt = {
-    uebersicht, versammlungen: versKarte(true), vorstand: vorstandKarte(true), finanzamt: finanzamtKarte, training: wochenKarte, berichte: berichteKarte,
-  }[a.tab] || uebersicht;
-  const titel = (tabs.find(([w]) => w === a.tab) || [0, "Organisation"])[1];
-  return a.tab === "uebersicht" ? { titel: "Organisation", zurueck: ["#/mehr", "Mehr"], inhalt } : { titel, zurueck: ["#/organisation", "Organisation"], inhalt };
-};
+    ${e.registernummer ? `<div class="kv"><span class="k">Vereinsregister</span><span class="w">${esc(e.registergericht)} · ${esc(e.registernummer)}</span></div>` : ""}</div>
+    ${(() => { const akten = [...(o.bescheid?.dokument ? [{ ...o.bescheid.dokument, datum: o.bescheid.vom }] : []), ...(o.akten || [])].filter((x, i, l) => l.findIndex((y) => y.datei === x.datei) === i).sort((x, y) => (y.datum || "").localeCompare(x.datum || ""));
+      const gr = {}; for (const d of akten) (gr[(d.datum || "").slice(0, 4) || "ohne Datum"] = gr[(d.datum || "").slice(0, 4) || "ohne Datum"] || []).push(d);
+      return Object.keys(gr).sort().reverse().map((j) => `${abschnitt(j)}<div class="karte" style="gap:0;padding-top:4px;padding-bottom:4px">${gr[j].map((d) => pdfZeile(d, d.datum ? dmy(d.datum) : "PDF")).join("")}</div>`).join(""); })()}`;
 
+  // Training und Hallen: Wochenplan, darunter Hallen
+  const hallenFarben = ["blau", "tuerkis", "lila", "gelb"];
+  const hallenIndex = {}; (o.orte || []).forEach((x, i) => (hallenIndex[x.id] = hallenFarben[i % hallenFarben.length]));
+  const training = `<div class="karte">${kartenTitel("Wochenplan")}
+    ${wochenplan.map((z) => `<div style="display:flex;gap:10px;align-items:center"><span style="width:26px;font-size:13px;font-weight:700" class="gedimmt">${esc(z.tag_text.slice(0, 2))}</span>
+      <div class="pille ${hallenIndex[z.ort] || ""}" style="flex:1;justify-content:flex-start;gap:10px;padding:8px 10px;border-radius:10px;font-size:13px"><b style="width:92px">${esc(z.von)}–${esc(z.bis)}</b><span style="font-weight:500;white-space:normal">${esc(z.ort_name)}${z.gruppe ? " · " + esc(z.gruppe) : ""}</span></div></div>`).join("") || `<span class="leer">Kein Wochenplan erfasst.</span>`}</div>
+    ${abschnitt("Hallen und Spiellokale")}
+    ${(o.orte || []).map((x) => `<div class="karte" style="gap:4px"><span style="font-size:15px;font-weight:600">${esc(x.name)}</span>
+      <span class="klein gedimmt">${[x.art, x.tische ? x.tische + " Tische" : "", x.adresse].filter(Boolean).map(esc).join(" · ")}</span>
+      ${x.antrag_frist ? `<span class="klein">Hallenantrag bis ${esc(x.antrag_frist)}</span>` : ""}
+      ${x.schluessel ? `<span class="klein gedimmt">Schlüssel: ${esc(x.schluessel)}</span>` : ""}
+      ${x.ansprechpartner ? `<span class="klein gedimmt">Ansprechpartner: ${esc(x.ansprechpartner)}${x.telefon ? ` · <a href="tel:${esc(x.telefon)}">${esc(x.telefon)}</a>` : ""}</span>` : ""}
+      ${(x.dokumente || []).map((d) => pdfZeile(d, d.datum ? dmy(d.datum) : "PDF")).join("")}</div>`).join("") || `<div class="karte"><span class="leer">Keine Hallen erfasst.</span></div>`}
+    ${(o.antraege || []).length ? `${abschnitt("Hallenanträge")}<div class="karte" style="gap:0">${o.antraege.map((d) => pdfZeile(d, d.datum ? dmy(d.datum) : "PDF")).join("")}</div>` : ""}`;
+  const berichte = `<div class="karte">${(o.taetigkeitsberichte || []).map((d) => pdfZeile(d, d.datum ? dmy(d.datum) : "PDF")).join("") || `<span class="leer">Noch keine Tätigkeitsberichte abgelegt.</span>`}</div>`;
+  const inhalt = { versammlungen, vorstand, finanzamt, training, berichte }[a.tab];
+  return {
+    titel: "Organisation", zurueck: ["#/mehr", "Mehr"],
+    kopf: chips("organisation", "tab", tabs, a.tab),
+    inhalt: `${kacheln}${inhalt}`,
+  };
+};
 SEITEN.versammlung = ([id]) => {
   const v = (S.daten.organisation?.versammlungen || []).find((x) => x.id === id);
   if (!v) return { titel: "Versammlung", zurueck: ["#/organisation", "Organisation"], inhalt: `<div class="karte"><span class="leer">Nicht gefunden.</span></div>` };
@@ -1265,26 +1546,58 @@ SEITEN.versammlung = ([id]) => {
       : `<div class="karte"><span class="leer">Noch kein Protokoll erfasst.</span>${dok("protokoll").map((d) => pdfZeile({ ...d, titel: "Protokoll (PDF)" })).join("")}</div>`;
   }
   return {
-    titel: v.titel, zurueck: ["#/organisation/versammlungen", "Versammlungen"],
+    titel: v.titel, zurueck: ["#/organisation/versammlungen", "Organisation"],
     kopf: `<span class="klein gedimmt" style="margin-top:-6px;font-size:13px">${esc(WT_LANG[datum(v.datum).getDay()])}, ${dmy(v.datum)}${v.uhrzeit ? " · " + esc(v.uhrzeit) : ""}${v.ort ? " · " + esc(v.ort) : ""}</span>
       ${segmente("versammlung", "tab", [["kurz", "Kurzfassung"], ["einladung", "Einladung"], ["protokoll", "Protokoll"]], a.tab)}`,
     inhalt,
   };
 };
 
-// ===================================================================================================== Vereinsleben
+// ===================================================================================================== Vereinsleben (Chronik | Galerie wie am PC)
+AKTIONEN.lebenJahr = (el) => {
+  const jahre = lebenJahre(); const a = ansicht("vereinsleben");
+  const i = jahre.indexOf(a.jahr) - Number(el.dataset.wert); // Jahre absteigend: ‹ = älter
+  if (i >= 0 && i < jahre.length) { a.jahr = jahre[i]; zeige(); }
+};
+function lebenJahre() { return [...new Set((S.daten.vereinsleben || []).map((e) => e.datum.slice(0, 4)))].sort().reverse(); }
 SEITEN.vereinsleben = () => {
-  const liste = S.daten.vereinsleben || [];
-  const [erst, ...rest] = liste;
+  const alle = S.daten.vereinsleben || [];
+  const jahre = lebenJahre();
+  const a = ansicht("vereinsleben", { jahr: jahre[0] || String(heute().getFullYear()), ansicht: "galerie", art: "" });
+  if (!jahre.includes(a.jahr) && jahre.length) a.jahr = jahre[0];
+  const imJahr = alle.filter((e) => e.datum.slice(0, 4) === a.jahr);
+  const arten = [...new Set(imJahr.map((e) => e.art).filter(Boolean))];
+  if (a.art && !arten.includes(a.art)) a.art = "";
+  const liste = imJahr.filter((e) => !a.art || e.art === a.art);
+  const bilder = imJahr.reduce((s, e) => s + (e.bilder?.length || 0), 0), videos = imJahr.reduce((s, e) => s + (e.videos?.length || 0), 0);
+  const teilnahmen = imJahr.reduce((s, e) => s + (e.teilnehmer?.length || 0) + (e.gaeste || 0), 0);
+  const farbe = S.daten.kalender?.bereiche?.Vereinsleben || "#6b8e23";
+  const kacheln = `<div class="kachelreihe drei">
+    ${kachel2({ titel: "Einträge", wert: imJahr.length, unter: a.jahr, farbe })}
+    ${kachel2({ titel: "Bilder", wert: bilder, unter: videos ? `+ ${videos} Video${videos > 1 ? "s" : ""}` : "", farbe })}
+    ${kachel2({ titel: "Teilnahmen", wert: teilnahmen, unter: imJahr.length ? `Ø ${Math.round(teilnahmen / imJahr.length)} je Eintrag` : "", farbe })}</div>`;
+  const i = jahre.indexOf(a.jahr);
+  const jahrWahl = `<div class="jahrwahl"><button class="pfeil" data-akt="lebenJahr" data-wert="-1" ${i >= jahre.length - 1 ? "disabled" : ""} aria-label="Voriges Jahr">${ic("zurueck", 20)}</button><b>${esc(a.jahr)}</b><button class="pfeil" data-akt="lebenJahr" data-wert="1" ${i <= 0 ? "disabled" : ""} aria-label="Nächstes Jahr">${ic("chev", 20)}</button>
+    <span style="flex:1"></span><div style="width:190px">${segmente("vereinsleben", "ansicht", [["chronik", "Chronik"], ["galerie", "Galerie"]], a.ansicht)}</div></div>`;
+  const artChips = arten.length > 1 ? chips("vereinsleben", "art", [["", "Alle"], ...arten.map((x) => [x, x])], a.art) : "";
+  const kachelBild = (e, gross) => `<button class="galkachel ${gross ? "gross" : ""}" data-go="#/eintrag/${encodeURIComponent(e.id)}">
+    <span class="galbild" ${e.titelbild ? `data-bild="${esc(e.titelbild)}" data-groesse="${gross ? 900 : 500}"` : ""}>${ic("bild", 26)}</span>
+    <span class="galart">${pille(e.art || "Eintrag")}</span>
+    <span class="galtext"><b>${esc(e.titel)}</b><span>${esc(wtDatum(e.datum))}${e.bilder?.length ? ` · ${e.bilder.length} Bilder` : ""}${e.teilnehmer?.length ? ` · ${e.teilnehmer.length} dabei` : ""}</span></span></button>`;
+  let inhalt;
+  if (a.ansicht === "galerie") {
+    const mitBild = liste.filter((e) => e.titelbild || e.bilder?.length), ohne = liste.filter((e) => !(e.titelbild || e.bilder?.length));
+    const [erst, ...rest] = mitBild;
+    inhalt = `${erst ? kachelBild(erst, true) : ""}${rest.length ? `<div class="galraster">${rest.map((e) => kachelBild(e, false)).join("")}</div>` : ""}
+      ${ohne.length ? `<div class="karte dicht">${ohne.map((e) => `<button class="zeile" data-go="#/eintrag/${encodeURIComponent(e.id)}"><div class="vorschau leer-bild"></div><div class="haupt"><span class="titel">${esc(e.titel)}</span><span class="unter">${esc(wtDatum(e.datum))} · noch keine Bilder</span></div>${CHEV}</button>`).join("")}</div>` : ""}
+      ${S.quelle !== "google" && mitBild.length ? `<span class="hinweis">Bilder gibt es nur mit Google-Anmeldung.</span>` : ""}`;
+  } else {
+    inhalt = `<div class="karte dicht">${liste.map((e) => `<button class="zeile" data-go="#/eintrag/${encodeURIComponent(e.id)}"><div class="vorschau ${e.titelbild ? "" : "leer-bild"}" ${e.titelbild ? `data-bild="${esc(e.titelbild)}" data-groesse="200"` : ""}></div>
+      <div class="haupt"><span class="titel">${esc(e.titel)}</span><span class="unter">${esc(wtDatum(e.datum))} · ${esc(e.art)}${e.bilder?.length ? ` · ${e.bilder.length} Bilder` : ""}${e.teilnehmer?.length ? ` · ${e.teilnehmer.length} dabei` : ""}</span>${e.bericht ? `<span class="unter zweizeilig">${esc(e.bericht)}</span>` : ""}</div>${CHEV}</button>`).join("")}</div>`;
+  }
   return {
-    titel: "Vereinsleben", zurueck: ["#/mehr", "Mehr"],
-    inhalt: erst ? `<button class="karte dicht" style="text-align:left;cursor:pointer;color:var(--text)" data-go="#/eintrag/${encodeURIComponent(erst.id)}">
-        <div class="titelbild" ${erst.titelbild ? `data-bild="${esc(erst.titelbild)}" data-groesse="900"` : ""}>${erst.titelbild ? ic("bild", 28) : ""}</div>
-        <div style="padding:14px;display:flex;flex-direction:column;gap:6px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:17px;font-weight:700;flex:1">${esc(erst.titel)}</span>${pille(erst.art, "gelb")}</div>
-          <span class="klein gedimmt" style="font-size:13px">${esc(wtDatum(erst.datum))}${erst.uhrzeit ? " · " + esc(erst.uhrzeit) : ""}${erst.ort ? " · " + esc(erst.ort) : ""}</span>
-          ${erst.bericht ? `<span style="font-size:14px">${esc(erst.bericht)}</span>` : ""}
-          <span class="klein gedimmt">${[erst.bilder.length ? erst.bilder.length + " Bilder" : "", erst.videos.length ? erst.videos.length + " Video" + (erst.videos.length > 1 ? "s" : "") : "", erst.dokumente.length ? erst.dokumente.length + " Dokument" + (erst.dokumente.length > 1 ? "e" : "") : ""].filter(Boolean).join(" · ")}</span></div></button>
-      ${rest.length ? `<div class="karte dicht">${rest.map(lebenZeile).join("")}</div>` : ""}` : `<div class="karte"><span class="leer">Noch keine Einträge.</span></div>`,
+    titel: "Vereinsleben", zurueck: ["#/mehr", "Mehr"], kopf: jahrWahl,
+    inhalt: liste.length || imJahr.length ? `${kacheln}${artChips}${inhalt}` : `<div class="karte"><span class="leer">Noch keine Einträge.</span></div>`,
   };
 };
 SEITEN.eintrag = ([id]) => {
@@ -1328,23 +1641,53 @@ AKTIONEN.bild = (el) => {
 };
 
 // ===================================================================================================== Dokumente
-TEILE.dokumente = () => {
-  const a = ansicht("dokumente", { suche: "" });
-  const q = norm(a.suche);
-  const gruppen = {};
-  for (const d of S.daten.dokumente || []) {
-    if (q && !norm(`${d.titel} ${d.bereich} ${d.datum}`).includes(q)) continue;
-    (gruppen[d.bereich] = gruppen[d.bereich] || []).push(d);
+function alleDokumente() {
+  const docs = (S.daten.dokumente || []).map((d) => ({ ...d, gruppe: (d.datum || "").slice(0, 4) || "ohne Datum" }));
+  for (const s of SB().spiele) {
+    if (!s.pdf) continue;
+    docs.push({ titel: `${teamName(s.mannschaft)} ${s.heim ? "gegen" : "bei"} ${s.gegner}`, bereich: "Spielberichte", datum: s.datum, datei: s.pdf, gruppe: `Saison ${s.saison}`,
+      unter: `${wtDatum(s.datum)} · ${s.liga}${s.ergebnis ? ` · ${s.ergebnis[0]}:${s.ergebnis[1]}` : ""}`, ergebnis: s.ergebnis });
   }
-  return Object.entries(gruppen).map(([b, liste]) => `<div class="karte dicht"><div class="gruppe-kopf">${esc(b)}<span>${liste.length}</span></div>
-    <div style="padding:0 14px">${liste.sort((x, y) => (y.datum || "").localeCompare(x.datum || "")).map((d) => pdfZeile(d, d.datum ? dmy(d.datum) : "")).join("")}</div></div>`).join("") || `<div class="karte"><span class="leer">Nichts gefunden.</span></div>`;
+  return docs;
+}
+function dateiTyp(pfad) {
+  const e = String(pfad || "").split(".").pop().toLowerCase();
+  return { pdf: ["PDF", "rot"], jpg: ["JPG", "tuerkis"], jpeg: ["JPG", "tuerkis"], png: ["PNG", "tuerkis"], heic: ["HEIC", "tuerkis"], docx: ["DOC", "blau"], doc: ["DOC", "blau"], xlsx: ["XLS", "gruen"], mp4: ["MP4", "lila"], mov: ["MOV", "lila"] }[e] || [e.toUpperCase().slice(0, 4) || "DATEI", ""];
+}
+function dokZeile(d) {
+  const [typ, farbe] = dateiTyp(d.datei);
+  return `<button class="zeile" data-datei="${esc(d.datei || "")}"><span class="dateityp ${farbe}">${esc(typ)}</span>
+    <div class="haupt"><span class="titel">${esc(d.titel)}</span><span class="unter">${esc(d.unter || [d.datum ? wtDatum(d.datum) + " " + d.datum.slice(0, 4) : "", d.bereich].filter(Boolean).join(" · "))}</span></div>
+    ${d.ergebnis ? pille(`${d.ergebnis[0]}:${d.ergebnis[1]}`, ergebnisArt(d.ergebnis)) : d.datum && tageBis(d.datum) >= -30 && tageBis(d.datum) <= 0 ? pille("neu", "blau") : ""}</button>`;
+}
+TEILE.dokumente = () => {
+  const a = ansicht("dokumente", { suche: "", bereich: "" });
+  const q = norm(a.suche);
+  const docs = alleDokumente().filter((d) => (!a.bereich || d.bereich === a.bereich) && (!q || norm(`${d.titel} ${d.bereich} ${d.datum} ${d.unter || ""}`).includes(q)));
+  if (!docs.length) return `<div class="karte"><span class="leer">Nichts gefunden.</span></div>`;
+  docs.sort((x, y) => (y.datum || "").localeCompare(x.datum || ""));
+  if (!a.bereich && !q) {
+    // Alle: Karte je Bereich mit Anzahl und den neuesten drei Dateien
+    const nach = {}; for (const d of docs) (nach[d.bereich] = nach[d.bereich] || []).push(d);
+    return `${abschnitt("Zuletzt hinzugefügt")}<div class="karte dicht">${docs.slice(0, 5).map(dokZeile).join("")}</div>`
+      + Object.entries(nach).sort((x, y) => y[1].length - x[1].length).map(([b, l]) => `<div class="karte dicht"><button class="gruppe-kopf knopflos" data-akt="setze" data-feld="dokumente.bereich" data-wert="${esc(b)}">${esc(b)}<span>${l.length} Datei${l.length === 1 ? "" : "en"}</span><span style="flex:1"></span><span class="link">Alle ›</span></button>${l.slice(0, 3).map(dokZeile).join("")}</div>`).join("");
+  }
+  const gruppen = []; for (const d of docs) { let g = gruppen.find((x) => x.g === d.gruppe); if (!g) gruppen.push((g = { g: d.gruppe, l: [] })); g.l.push(d); }
+  return gruppen.map(({ g, l }) => `${abschnitt(`${g} · ${l.length}`)}<div class="karte dicht">${l.map(dokZeile).join("")}</div>`).join("");
 };
-SEITEN.dokumente = () => ({
-  titel: "Dokumente", zurueck: ["#/mehr", "Mehr"], kopf: suchfeld("dokumente", "suche", "Titel oder Bereich", "dokumente"),
-  inhalt: `<div style="display:flex;flex-direction:column;gap:12px" data-teil-ziel="dokumente">${TEILE.dokumente()}</div>
-    <span class="hinweis">Antippen öffnet das Dokument in Google Drive.</span>`,
-});
-
+SEITEN.dokumente = () => {
+  const a = ansicht("dokumente", { suche: "", bereich: "" });
+  const docs = alleDokumente(), zahl = {};
+  for (const d of docs) zahl[d.bereich] = (zahl[d.bereich] || 0) + 1;
+  const neu = docs.filter((d) => d.datum && tageBis(d.datum) >= -30 && tageBis(d.datum) <= 0).length;
+  return {
+    titel: "Dokumente", zurueck: ["#/mehr", "Mehr"], rechts: `${docs.length} Dateien${neu ? ` · ${neu} neu` : ""}`,
+    kopf: `${suchfeld("dokumente", "suche", "Titel, Mitglied oder Gegner", "dokumente")}
+      ${chips("dokumente", "bereich", [["", `Alle ${docs.length}`], ...Object.entries(zahl).sort((x, y) => y[1] - x[1]).map(([b, n]) => [b, `${b} ${n}`])], a.bereich)}`,
+    inhalt: `<div style="display:flex;flex-direction:column;gap:12px" data-teil-ziel="dokumente">${TEILE.dokumente()}</div>
+      <span class="hinweis">Antippen öffnet die Datei in Google Drive.</span>`,
+  };
+};
 // ===================================================================================================== Start der App
 // Ziehen zum Aktualisieren (oben am Inhalt nach unten ziehen)
 (function ziehenZumAktualisieren() {
